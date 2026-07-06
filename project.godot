@@ -11,19 +11,23 @@ config_version=5
 [application]
 
 config/name="donnoknow"
-config/features=PackedStringArray("4.7", "Mobile")
+run/main_scene="res://scenes/menu.tscn"
+config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://icon.svg"
 
 [display]
 
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
-
-[physics]
-
-3d/physics_engine="Jolt Physics"
+window/size/viewport_width=1280
+window/size/viewport_height=720
+window/stretch/mode="viewport"
+window/stretch/aspect="keep_height"
+window/stretch/scale_mode="integer"
 
 [rendering]
 
-rendering_device/driver.windows="d3d12"
-renderer/rendering_method="mobile"
+textures/canvas_textures/default_texture_filter=0
+
+[2d]
+
+snap/snap_2d_transforms_to_pixel=true
+snap/snap_2d_vertices_to_pixel=true
