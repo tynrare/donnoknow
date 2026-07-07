@@ -1,7 +1,8 @@
-[gd_scene load_steps=3 format=4 uid="uid://cplay001"]
+[gd_scene load_steps=4 format=4 uid="uid://cplay001"]
 
-[ext_resource type="Script" path="res://scripts/play.gd" id="1_script"]
 [ext_resource type="TileSet" uid="uid://boe45xg8e1dsy" path="res://resources/platformer.tileset.tres" id="1"]
+[ext_resource type="Script" uid="uid://cen4bpf3vm134" path="res://scripts/play.gd" id="1_script"]
+[ext_resource type="PackedScene" uid="uid://clevel0001" path="res://scenes/level_0.tscn" id="2_level"]
 
 [node name="Play" type="Node2D" unique_id=1359479886]
 script = ExtResource("1_script")
@@ -9,6 +10,8 @@ script = ExtResource("1_script")
 [node name="TileMapLayer" type="TileMapLayer" parent="." unique_id=2030503736]
 tile_map_data = PackedByteArray("AAAAACUAAAAAAAYAAAAAACYAAAAAAAcAAAAAACcAAAAAAAgAAAABACUAAAABAAYAAAABACYAAAABAAcAAAABACcAAAABAAgAAAACACUAAAACAAYAAAACACYAAAACAAcAAAACACcAAAACAAgAAAAIAAcABAABAAAAAAAJAAcABAACAAAAAAAKAAcABAACAAEAAAALAAcABAACAAIAAAALAAYABAABAAEAAAAMAAYABAACAAEAAAANAAYABAADAAEAAAANAAcABAADAAMAAAAMAAcABAACAAMAAAAKAAgABAABAAIAAAAKAAkABAAAAAIAAAAJAAoABAABAAAAAAAKAAoABAADAAMAAAALAAgABAADAAMAAAALAAUABAANAAYAAAALAAQABAAMAAYAAAALAAMABAAMAAQAAAALAAIABAANAAQAAAAKAAIABAANAAIAAAAKAAEABAANAAEAAAALAAEABAAOAAEAAAAMAAEABAAPAAEAAAAMAAIABAAPAAIAAAAMAAAABAAPAAAAAAALAAAABAAOAAAAAAAKAAAABAANAAAAAAAKAAQABAAPAAUAAAAJAAQABAAPAAQAAAAIAAQABAAPAAQAAAAHAAQABAAOAAUAAAA=")
 tile_set = ExtResource("1")
+
+[node name="Level0" parent="." instance=ExtResource("2_level")]
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=429384670]
 position = Vector2(320, 180)

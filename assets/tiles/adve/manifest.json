@@ -1,0 +1,19 @@
+{
+	"atlas": "res://assets/tiles/adve/tiles.png",
+	"columns": 16,
+	"first_gid": 1,
+	"maps": [
+		"res://assets/tiles/adve/map.tmx"
+	],
+	"pack": "adve",
+	"rules": "res://resources/generator/adve.rules.json",
+	"source_id": 0,
+	"tile_size": [
+		8,
+		8
+	],
+	"tileset": "res://resources/adve.tileset.tres",
+	"tileset_src": "tiles.tsx",
+	"tile_count": 256,
+	"rows": 16
+}
