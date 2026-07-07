@@ -8,26 +8,32 @@
 
 config_version=5
 
-[application]
-
-config/name="donnoknow"
-run/main_scene="res://scenes/menu.tscn"
-config/features=PackedStringArray("4.6", "Forward Plus")
-config/icon="res://icon.svg"
-
-[display]
-
-window/size/viewport_width=1280
-window/size/viewport_height=720
-window/stretch/mode="viewport"
-window/stretch/aspect="keep_height"
-window/stretch/scale_mode="integer"
-
-[rendering]
-
-textures/canvas_textures/default_texture_filter=0
-
 [2d]
 
 snap/snap_2d_transforms_to_pixel=true
 snap/snap_2d_vertices_to_pixel=true
+
+[application]
+
+config/name="donnoknow"
+run/main_scene="res://scenes/menu.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+config/icon="res://icon.svg"
+
+[autoload]
+
+DisplayScale="*res://scripts/display_scale.gd"
+
+[display]
+
+window/size/viewport_width=640
+window/size/viewport_height=360
+window/size/window_width_override=1280
+window/size/window_height_override=720
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+window/stretch/scale_mode="fractional"
+
+[rendering]
+
+textures/canvas_textures/default_texture_filter=0

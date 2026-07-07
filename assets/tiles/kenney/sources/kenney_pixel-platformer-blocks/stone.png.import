@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ddtm8xlkj714t"
-path="res://.godot/imported/kenney_pixel-platformer-blocks_sand_packed.png-e4e9e6db40473e01a520a187a7a7dbfd.ctex"
+uid="uid://cibd0appibro"
+path="res://.godot/imported/stone.png-d52b54f09e501830413545886c0e0457.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks_sand_packed.png"
-dest_files=["res://.godot/imported/kenney_pixel-platformer-blocks_sand_packed.png-e4e9e6db40473e01a520a187a7a7dbfd.ctex"]
+source_file="res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/stone.png"
+dest_files=["res://.godot/imported/stone.png-d52b54f09e501830413545886c0e0457.ctex"]
 
 [params]
 

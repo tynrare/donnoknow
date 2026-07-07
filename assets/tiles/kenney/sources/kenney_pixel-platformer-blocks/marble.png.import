@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dn4xjpl2sjta6"
-path="res://.godot/imported/kenney_pixel-platformer-farm-expansion_tilemap_packed.png-a23b73fe732ea1066dc8e67a6c4f60c1.ctex"
+uid="uid://bvirsldmu2g8u"
+path="res://.godot/imported/marble.png-7a595a13e227eb16bbc0d7f38c19b132.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/tiles/kenney/sources/kenney_pixel-platformer-farm-expansion_tilemap_packed.png"
-dest_files=["res://.godot/imported/kenney_pixel-platformer-farm-expansion_tilemap_packed.png-a23b73fe732ea1066dc8e67a6c4f60c1.ctex"]
+source_file="res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/marble.png"
+dest_files=["res://.godot/imported/marble.png-7a595a13e227eb16bbc0d7f38c19b132.ctex"]
 
 [params]
 

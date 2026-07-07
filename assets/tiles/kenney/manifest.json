@@ -1,0 +1,10 @@
+{
+	"ids": {
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/marble.png": 1,
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/rock.png": 2,
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/sand.png": 3,
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-blocks/stone.png": 0,
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-farm-expansion/tilemap.png": 4,
+		"res://assets/tiles/kenney/sources/kenney_pixel-platformer-industrial-expansion/tilemap.png": 5
+	}
+}
