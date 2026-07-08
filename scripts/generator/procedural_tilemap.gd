@@ -15,12 +15,14 @@ const GENERATED_NAME := "Generated"
 @export var max_restarts: int = 8
 @export var steps_per_frame: int = 2
 @export var bounds: Rect2i = Rect2i(0, 0, 54, 35)
-@export var strict_patterns: bool = false
+@export var context_halo: int = 1
 @export var use_patterns: bool = true
 @export var backtrack_depth: int = 8
 @export var repeat_penalty: float = 1.0
 @export var tile_bias: Dictionary = {}
 @export var chunk_size: int = 8
+
+const BOUNDS_HANDLE_RADIUS := 2.0
 
 var _job: GenWfcJob = null
 var _manifest: Dictionary = {}
@@ -28,12 +30,85 @@ var _constraints: Dictionary = {}
 var _rules: Dictionary = {}
 var _gen_width: int = 0
 var _gen_height: int = 0
+var _gen_halo: int = 0
+var _gen_origin: Vector2i = Vector2i.ZERO
 var _gen_options: Dictionary = {}
+
+
+func get_bounds_local_rect() -> Rect2:
+	var ts := _bounds_tile_size()
+	var half := ts * 0.5
+	var tl := map_to_local(bounds.position) - half
+	return Rect2(tl, Vector2(bounds.size) * ts)
+
+
+func _bounds_tile_size() -> Vector2:
+	if tile_set:
+		return Vector2(tile_set.tile_size)
+	return Vector2(8, 8)
+
+
+func canvas_pos_to_bounds_tile(canvas_pos: Vector2) -> Vector2i:
+	return local_to_map(to_local(canvas_pos))
+
+
+func queue_bounds_redraw() -> void:
+	queue_redraw()
+
+
+func _notification(what: int) -> void:
+	if not Engine.is_editor_hint():
+		return
+	if what == NOTIFICATION_TRANSFORM_CHANGED:
+		queue_redraw()
+
+
+func _draw() -> void:
+	if not Engine.is_editor_hint():
+		return
+	if bounds.size.x <= 0 or bounds.size.y <= 0:
+		return
+	if not _is_selected_in_editor():
+		return
+
+	var local_rect := get_bounds_local_rect()
+	draw_rect(local_rect, Color(0.2, 0.85, 1.0, 0.12), true)
+	draw_rect(local_rect, Color(0.2, 0.85, 1.0, 0.95), false, 1.0)
+
+	var handles: Array[Vector2] = [
+		local_rect.position,
+		local_rect.position + Vector2(local_rect.size.x, 0.0),
+		local_rect.position + local_rect.size,
+		local_rect.position + Vector2(0.0, local_rect.size.y),
+		local_rect.position + Vector2(local_rect.size.x * 0.5, 0.0),
+		local_rect.position + Vector2(local_rect.size.x, local_rect.size.y * 0.5),
+		local_rect.position + Vector2(local_rect.size.x * 0.5, local_rect.size.y),
+		local_rect.position + Vector2(0.0, local_rect.size.y * 0.5),
+		local_rect.get_center(),
+	]
+	for i in handles.size():
+		var hp: Vector2 = handles[i]
+		var fill := Color(1.0, 0.65, 0.1, 0.95) if i == 8 else Color(0.2, 0.85, 1.0, 0.95)
+		draw_rect(
+			Rect2(hp - Vector2.ONE * BOUNDS_HANDLE_RADIUS, Vector2.ONE * BOUNDS_HANDLE_RADIUS * 2.0),
+			fill,
+			true,
+		)
+		draw_rect(
+			Rect2(hp - Vector2.ONE * BOUNDS_HANDLE_RADIUS, Vector2.ONE * BOUNDS_HANDLE_RADIUS * 2.0),
+			Color(0.1, 0.1, 0.1, 0.9),
+			false,
+			1.0,
+		)
+
+
+func _is_selected_in_editor() -> bool:
+	var selected: Array[Node] = EditorInterface.get_selection().get_selected_nodes()
+	return selected.size() == 1 and selected[0] == self
 
 
 func _gen_options_dict() -> Dictionary:
 	return {
-		"strict_patterns": strict_patterns,
 		"use_patterns": use_patterns,
 		"backtrack_depth": backtrack_depth,
 		"max_restarts": max_restarts,
@@ -41,6 +116,32 @@ func _gen_options_dict() -> Dictionary:
 		"tile_bias": tile_bias,
 		"chunk_size": chunk_size,
 	}
+
+
+func _gen_paint_rect() -> Rect2i:
+	return Rect2i(_gen_origin, Vector2i(_gen_width, _gen_height))
+
+
+func _is_interior_idx(idx: int) -> bool:
+	if _gen_halo <= 0:
+		return true
+	var lx: int = idx % _gen_width
+	var ly: int = idx / _gen_width
+	return (
+		lx >= _gen_halo
+		and ly >= _gen_halo
+		and lx < _gen_halo + bounds.size.x
+		and ly < _gen_halo + bounds.size.y
+	)
+
+
+func _generation_size(_manifest: Dictionary) -> Vector2i:
+	var w: int = bounds.size.x
+	var h: int = bounds.size.y
+	if w > 0 and h > 0:
+		return Vector2i(w, h)
+	var map_size: Vector2i = GenService.map_size(_manifest)
+	return map_size
 
 
 func _seed_fixed_on_generated(
@@ -51,16 +152,58 @@ func _seed_fixed_on_generated(
 	height: int,
 ) -> void:
 	var source_id: int = manifest.get("source_id", 0)
+	var paint_rect := _gen_paint_rect()
 	for y in height:
 		for x in width:
 			var i: int = y * width + x
+			if not _is_interior_idx(i):
+				continue
 			if constraints.modes[i] != GenConstraints.Mode.FIXED:
 				continue
 			var gid: int = constraints.fixed_gids[i]
 			var atlas: Vector2i = GenService.gid_to_atlas(manifest, gid)
 			if atlas.x < 0:
 				continue
-			generated.set_cell(bounds.position + Vector2i(x, y), source_id, atlas)
+			generated.set_cell(
+				paint_rect.position + Vector2i(x, y), source_id, atlas
+			)
+
+
+func _sync_generated_from_constraints(
+	generated: TileMapLayer,
+	manifest: Dictionary,
+	constraints: Dictionary,
+	width: int,
+	height: int,
+) -> void:
+	_seed_fixed_on_generated(generated, manifest, constraints, width, height)
+	var paint_rect := _gen_paint_rect()
+	var seeds: PackedInt32Array = constraints.get("seed_gids", PackedInt32Array())
+	for y in height:
+		for x in width:
+			var i: int = y * width + x
+			if not _is_interior_idx(i):
+				continue
+			if constraints.modes[i] == GenConstraints.Mode.FIXED:
+				continue
+			if constraints.modes[i] == GenConstraints.Mode.FORBID:
+				continue
+			if i >= seeds.size() or seeds[i] <= 0:
+				continue
+			GenService.paint_cell(
+				generated, manifest, paint_rect, width, i, seeds[i], constraints
+			)
+
+
+func _reset_generated_for_attempt(
+	generated: TileMapLayer,
+	manifest: Dictionary,
+	constraints: Dictionary,
+	width: int,
+	height: int,
+) -> void:
+	GenService.clear_bounds(generated, bounds)
+	_sync_generated_from_constraints(generated, manifest, constraints, width, height)
 
 
 func _ensure_generated() -> TileMapLayer:
@@ -91,9 +234,12 @@ func _validate_setup() -> void:
 		push_error("ProceduralTilemap: missing manifest %s" % manifest_path)
 		return
 	var rules: Dictionary = GenRules.load(rules_path)
-	var map_size: Vector2i = GenService.map_size(manifest)
-	var w: int = map_size.x if map_size.x > 0 else bounds.size.x
-	var h: int = map_size.y if map_size.y > 0 else bounds.size.y
+	var size: Vector2i = _generation_size(manifest)
+	var w: int = size.x
+	var h: int = size.y
+	if w <= 0 or h <= 0:
+		push_error("ProceduralTilemap: invalid generation bounds %s" % bounds)
+		return
 	var gids: PackedInt32Array = GenService.gids_from_layer(self, manifest, w, h, bounds.position)
 	var constraints: Dictionary = GenConstraints.from_gids(w, h, gids)
 	var report: Dictionary = GenService.validate_setup(manifest, rules, constraints)
@@ -152,23 +298,48 @@ func _generate_map() -> void:
 		push_error("ProceduralTilemap: missing rules %s (use Analyze Rules first)" % rules_path)
 		return
 
-	var map_size: Vector2i = GenService.map_size(manifest)
-	var w: int = map_size.x if map_size.x > 0 else bounds.size.x
-	var h: int = map_size.y if map_size.y > 0 else bounds.size.y
-	if w <= 0 or h <= 0:
-		push_error("ProceduralTilemap: invalid bounds %s" % bounds)
+	var size: Vector2i = _generation_size(manifest)
+	var inner_w: int = size.x
+	var inner_h: int = size.y
+	if inner_w <= 0 or inner_h <= 0:
+		push_error("ProceduralTilemap: invalid generation bounds %s" % bounds)
 		return
-	if map_size.x > 0 and map_size.y > 0:
-		bounds = Rect2i(bounds.position.x, bounds.position.y, w, h)
 
-	var paint_gids: PackedInt32Array = GenService.gids_from_layer(self, manifest, w, h, bounds.position)
+	var halo: int = maxi(context_halo, 0)
+	var grid_w: int = inner_w + halo * 2
+	var grid_h: int = inner_h + halo * 2
+	var grid_origin: Vector2i = bounds.position - Vector2i(halo, halo)
+
+	var paint_gids: PackedInt32Array = GenService.gids_from_layer(
+		self, manifest, grid_w, grid_h, grid_origin
+	)
 	var generated: TileMapLayer = _ensure_generated()
-	var seed_gids: PackedInt32Array = GenService.gids_from_layer(generated, manifest, w, h, bounds.position)
-	var constraints: Dictionary = GenConstraints.from_paint_and_seed(w, h, paint_gids, seed_gids)
+	var context_gids: PackedInt32Array = GenService.gids_from_layer(
+		generated, manifest, grid_w, grid_h, grid_origin
+	)
+	var constraints: Dictionary = GenConstraints.from_paint_seed_and_halo(
+		grid_w, grid_h, halo, inner_w, inner_h, paint_gids, context_gids
+	)
 	var seed_count := 0
-	for i in seed_gids.size():
-		if seed_gids[i] > 0 and constraints.modes[i] != GenConstraints.Mode.FIXED:
-			seed_count += 1
+	var context_count := 0
+	for y in grid_h:
+		for x in grid_w:
+			var i: int = y * grid_w + x
+			if i >= context_gids.size() or context_gids[i] <= 0:
+				continue
+			var in_inner: bool = (
+				halo <= 0
+				or (
+					x >= halo
+					and y >= halo
+					and x < halo + inner_w
+					and y < halo + inner_h
+				)
+			)
+			if in_inner and constraints.modes[i] != GenConstraints.Mode.FIXED:
+				seed_count += 1
+			elif not in_inner and constraints.modes[i] == GenConstraints.Mode.FIXED:
+				context_count += 1
 	var setup := GenService.validate_setup(manifest, rules, constraints)
 	for warn in setup.get("warnings", []):
 		print("ProceduralTilemap warn: %s" % warn)
@@ -179,16 +350,17 @@ func _generate_map() -> void:
 	var restarts: int = 32 if max_restarts == null else max_restarts
 	var options: Dictionary = _gen_options_dict()
 
-	GenService.clear_bounds(generated, bounds)
-	_seed_fixed_on_generated(generated, manifest, constraints, w, h)
-	generated.update_internals()
-
 	_manifest = manifest
 	_constraints = constraints
 	_rules = rules
-	_gen_width = w
-	_gen_height = h
+	_gen_width = grid_w
+	_gen_height = grid_h
+	_gen_halo = halo
+	_gen_origin = grid_origin
 	_gen_options = options
+
+	_sync_generated_from_constraints(generated, manifest, constraints, grid_w, grid_h)
+	generated.update_internals()
 
 	_job = GenService.create_job(manifest, rules, constraints, map_seed, restarts, options)
 	if _job.finished:
@@ -198,9 +370,10 @@ func _generate_map() -> void:
 
 	set_process(true)
 	var mode := "continue" if seed_count > 0 else "new"
+	var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
 	print(
-		"ProceduralTilemap: generating %dx%d wfc (%s, %d seeded, %d fixed)…"
-		% [w, h, mode, seed_count, _count_fixed(constraints)]
+		"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s)…"
+		% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note]
 	)
 
 
@@ -224,8 +397,8 @@ func _stop_generation() -> void:
 
 
 func _finish_job(step: Dictionary) -> void:
-	var w: int = _gen_width if _gen_width > 0 else bounds.size.x
-	var h: int = _gen_height if _gen_height > 0 else bounds.size.y
+	var w: int = bounds.size.x
+	var h: int = bounds.size.y
 	var generated: TileMapLayer = _ensure_generated()
 
 	var result: Dictionary = step
@@ -235,7 +408,7 @@ func _finish_job(step: Dictionary) -> void:
 		)
 
 	var filled: int = int(result.get("filled", 0))
-	if filled > 0 or step.get("cancelled", false) or step.get("ok", false):
+	if step.get("cancelled", false) or step.get("finished", false):
 		_paint_result(generated, result)
 		_log_result(result, w, h)
 	elif int(result.get("total", 0)) == 0:
@@ -250,38 +423,50 @@ func _finish_job(step: Dictionary) -> void:
 	_manifest = {}
 	_constraints = {}
 	_rules = {}
+	_gen_width = 0
+	_gen_height = 0
+	_gen_halo = 0
+	_gen_origin = Vector2i.ZERO
 	_gen_options = {}
 	set_process(false)
 
 
 func _paint_result(generated: TileMapLayer, result: Dictionary) -> void:
 	var gids: PackedInt32Array = result.get("gids", PackedInt32Array())
-	var w: int = _gen_width if _gen_width > 0 else bounds.size.x
+	var paint_rect := _gen_paint_rect()
 	for i in gids.size():
+		if not _is_interior_idx(i):
+			continue
 		if _constraints.modes[i] == GenConstraints.Mode.FIXED:
 			continue
 		if _constraints.modes[i] == GenConstraints.Mode.FORBID:
 			continue
 		if gids[i] <= 0:
 			continue
-		GenService.paint_cell(generated, _manifest, bounds, w, i, gids[i], _constraints)
+		GenService.paint_cell(
+			generated, _manifest, paint_rect, _gen_width, i, gids[i], _constraints
+		)
 	generated.update_internals()
 
 
 func _paint_step_cell(generated: TileMapLayer, idx: int, gid: int) -> void:
 	if gid <= 0:
 		return
+	if not _is_interior_idx(idx):
+		return
 	GenService.paint_cell(
-		generated, _manifest, bounds, _gen_width, idx, gid, _constraints
+		generated, _manifest, _gen_paint_rect(), _gen_width, idx, gid, _constraints
 	)
 
 
 func _erase_step_cell(generated: TileMapLayer, idx: int) -> void:
+	if not _is_interior_idx(idx):
+		return
 	if _constraints.modes[idx] == GenConstraints.Mode.FIXED:
 		return
 	if _constraints.modes[idx] == GenConstraints.Mode.FORBID:
 		return
-	var cell := bounds.position + Vector2i(idx % _gen_width, idx / _gen_width)
+	var cell := _gen_origin + Vector2i(idx % _gen_width, idx / _gen_width)
 	generated.erase_cell(cell)
 
 
@@ -311,20 +496,11 @@ func _process(_delta: float) -> void:
 
 	for _i in steps:
 		var step: Dictionary = _job.step()
-		if step.get("restarted", false) and _job != null and not _job.cancelled:
-			GenService.clear_bounds(generated, bounds)
-			_seed_fixed_on_generated(
-				generated, _manifest, _constraints, _gen_width, _gen_height
-			)
-			dirty = true
-		elif step.get("finished", false):
+		if step.get("finished", false):
 			if dirty:
 				generated.update_internals()
 			_finish_job(step)
 			return
-		elif step.get("backtracked", false) and step.has("idx"):
-			_erase_step_cell(generated, int(step.idx))
-			dirty = true
 		elif step.has("idx") and step.has("gid"):
 			_paint_step_cell(generated, int(step.idx), int(step.gid))
 			dirty = true
@@ -340,7 +516,19 @@ func _clear_map() -> void:
 		return
 	GenService.clear_bounds(generated, bounds)
 	generated.update_internals()
+	queue_bounds_redraw()
 	print("ProceduralTilemap: cleared Generated in %s" % bounds)
+
+
+func _clear_all_map() -> void:
+	_stop_generation()
+	var generated := get_node_or_null(GENERATED_NAME) as TileMapLayer
+	if generated == null:
+		return
+	generated.clear()
+	generated.update_internals()
+	queue_bounds_redraw()
+	print("ProceduralTilemap: cleared all Generated tiles")
 
 
 @export_tool_button("Validate Setup", "Callable")
@@ -371,3 +559,9 @@ var _stop_action: Callable:
 var _clear_action: Callable:
 	get:
 		return Callable(self, "_clear_map")
+
+
+@export_tool_button("Clear All", "Callable")
+var _clear_all_action: Callable:
+	get:
+		return Callable(self, "_clear_all_map")

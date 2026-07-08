@@ -472,7 +472,7 @@ static func _propagate_one_hop(
 				continue
 			if done[ni]:
 				continue
-			_narrow(ni, idx, d, domains, domain_counts, done, out, ctx)
+			_narrow(ni, idx, d, domains, domain_counts, done, out, w, h, ctx)
 
 
 static func _propagate(
@@ -509,7 +509,7 @@ static func _propagate(
 				continue
 			if done[ni]:
 				continue
-			var changed: int = _narrow(ni, idx, d, domains, domain_counts, done, out, ctx)
+			var changed: int = _narrow(ni, idx, d, domains, domain_counts, done, out, w, h, ctx)
 			if changed < 0:
 				return false
 			if changed > 0 and not in_queue[ni]:
@@ -527,6 +527,8 @@ static func _narrow(
 	domain_counts: PackedInt32Array,
 	done: PackedByteArray,
 	out: PackedInt32Array,
+	w: int,
+	h: int,
 	ctx: Dictionary,
 ) -> int:
 	var count: int = ctx.count
@@ -574,6 +576,16 @@ static func _narrow(
 		domain_counts[dst] = 0
 		return -1
 	domain_counts[dst] = new_count
+
+	if not done[dst] and ctx.get("use_patterns", false):
+		if not _apply_pattern_filter(
+			dst_domain, domain_counts, dst, out, done, w, h, ctx
+		):
+			domain_counts[dst] = 0
+			return -1
+		if domain_counts[dst] == 0:
+			return -1
+
 	return 1
 
 
@@ -641,7 +653,6 @@ static func _apply_pattern_filter(
 	w: int,
 	h: int,
 	ctx: Dictionary,
-	strict: bool = false,
 ) -> bool:
 	var patterns: Array = ctx.get("patterns", [])
 	if not ctx.get("use_patterns", false) or patterns.is_empty():
@@ -665,7 +676,11 @@ static func _apply_pattern_filter(
 	if collapsed == 0:
 		return true
 
-	var allowed: Dictionary = _pattern_allowed_centers(out, done, idx, w, h, ctx)
+	var allowed: Variant = _pattern_allowed_centers(out, done, idx, w, h, ctx)
+	if allowed == null:
+		return true
+
+	var allowed_map: Dictionary = allowed
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var backup := domain.duplicate()
@@ -673,7 +688,7 @@ static func _apply_pattern_filter(
 	for t in count:
 		if not domain[t]:
 			continue
-		if allowed.has(idx_to_gid[t]):
+		if allowed_map.has(idx_to_gid[t]):
 			new_count += 1
 		else:
 			domain[t] = 0
@@ -681,7 +696,7 @@ static func _apply_pattern_filter(
 	if new_count == 0:
 		for t in count:
 			domain[t] = backup[t]
-		return not strict
+		return true
 
 	domain_counts[idx] = new_count
 	return true
@@ -694,7 +709,7 @@ static func _pattern_allowed_centers(
 	w: int,
 	h: int,
 	ctx: Dictionary,
-) -> Dictionary:
+):
 	var window := PackedInt32Array()
 	window.resize(9)
 	window.fill(0)
@@ -727,7 +742,7 @@ static func _pattern_allowed_centers(
 		if not merged.is_empty():
 			return merged
 
-	return {}
+	return null
 
 
 static func _window_mask_key(window: PackedInt32Array, mask: int) -> String:

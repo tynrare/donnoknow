@@ -16,7 +16,6 @@ const TILED_GID_MASK := 0x1FFFFFFF
 static func default_options() -> Dictionary:
 	return {
 		"gen_method": "wfc",
-		"strict_patterns": false,
 		"use_patterns": true,
 		"backtrack_depth": 8,
 		"max_restarts": 8,

@@ -21,6 +21,7 @@ func _init() -> void:
 	_test_full_propagate_from_fixed(ctx, rules, deadline)
 	_test_pick_ignores_distant_zero_domains(ctx, rules, deadline)
 	_test_untried_domain_count(deadline)
+	_test_halo_context_constraints(deadline)
 
 	print("PASS propagation tests ms=%d" % (DEADLINE_MS - (deadline - Time.get_ticks_msec())))
 	quit(0)
@@ -225,3 +226,31 @@ func _test_untried_domain_count(deadline: int) -> void:
 	domain[4] = 1
 	_assert(GenWfc.untried_domain_count(domain, [2]) == 2, "untried_domain_count wrong")
 	print("PASS untried_domain_count")
+
+
+func _test_halo_context_constraints(deadline: int) -> void:
+	_check_deadline(deadline, "halo_constraints")
+	var paint := PackedInt32Array()
+	paint.resize(25)
+	paint.fill(0)
+	var context := paint.duplicate()
+	context[2 * 5 + 0] = 42
+
+	var c := GenConstraints.from_paint_seed_and_halo(5, 5, 1, 3, 3, paint, context)
+	var halo_idx: int = 2 * 5 + 0
+	var inner_idx: int = 2 * 5 + 2
+
+	_assert(c.modes[halo_idx] == GenConstraints.Mode.FIXED, "halo tile should be FIXED")
+	_assert(c.fixed_gids[halo_idx] == 42, "halo tile gid")
+	_assert(c.modes[inner_idx] == GenConstraints.Mode.GENERATE, "empty inner cell GENERATE")
+	_assert(c.modes[0] == GenConstraints.Mode.FORBID, "empty halo cell FORBID")
+
+	context[2 * 5 + 2] = 99
+	var c2 := GenConstraints.from_paint_seed_and_halo(5, 5, 1, 3, 3, paint, context)
+	_assert(c2.modes[inner_idx] != GenConstraints.Mode.FIXED, "inner generated tile is seed not fixed")
+	_assert(c2.get("seed_gids", PackedInt32Array())[inner_idx] == 99, "inner seed gid")
+
+	var c0 := GenConstraints.from_paint_seed_and_halo(3, 3, 0, 3, 3, paint, context)
+	_assert(c0.has("seed_gids"), "halo=0 delegates to paint+seed")
+
+	print("PASS halo context constraints")
