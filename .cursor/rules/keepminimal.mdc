@@ -1,0 +1,11 @@
+---
+description: Minimal output — brief replies, smallest diffs, no fluff
+alwaysApply: true
+---
+
+# keepminimal
+
+- Shortest path to the answer. No narration or option menus unless asked.
+- Outcome first. Few sentences. No recap, preamble, or closing bait.
+- Smallest working diff. No extras, drive-by refactors, or over-abstraction.
+- Match existing project style and conventions.

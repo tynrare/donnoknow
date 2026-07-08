@@ -44,6 +44,13 @@ static func read_map(path: String) -> Dictionary:
 	}
 
 
+static func read_map_size(path: String) -> Vector2i:
+	var map := read_map(path)
+	if map.is_empty():
+		return Vector2i(0, 0)
+	return Vector2i(int(map.width), int(map.height))
+
+
 static func write_map(path: String, meta: Dictionary, gids: PackedInt32Array) -> Error:
 	var width: int = meta.width
 	var height: int = meta.height

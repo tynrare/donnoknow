@@ -1,3 +1,4 @@
+# agent: composer-2.5 | 2026-07-07 | paint+seed constraints | d1e2f3
 extends RefCounted
 
 enum Mode { GENERATE, FIXED, FORBID }
@@ -25,6 +26,36 @@ static func from_gids(width: int, height: int, gids: PackedInt32Array) -> Dictio
 			modes[i] = Mode.FIXED
 			fixed[i] = gids[i]
 	return {"width": width, "height": height, "modes": modes, "fixed_gids": fixed}
+
+
+static func from_paint_and_seed(
+	width: int,
+	height: int,
+	paint_gids: PackedInt32Array,
+	seed_gids: PackedInt32Array,
+) -> Dictionary:
+	var n: int = width * height
+	var modes: Array = _filled(n, Mode.GENERATE)
+	var fixed := PackedInt32Array()
+	fixed.resize(n)
+	fixed.fill(0)
+	var seeds := PackedInt32Array()
+	seeds.resize(n)
+	seeds.fill(0)
+	for i in mini(n, paint_gids.size()):
+		if paint_gids[i] > 0:
+			modes[i] = Mode.FIXED
+			fixed[i] = paint_gids[i]
+			seeds[i] = 0
+		elif i < seed_gids.size() and seed_gids[i] > 0:
+			seeds[i] = seed_gids[i]
+	return {
+		"width": width,
+		"height": height,
+		"modes": modes,
+		"fixed_gids": fixed,
+		"seed_gids": seeds,
+	}
 
 
 static func set_fixed(c: Dictionary, x: int, y: int, gid: int) -> void:

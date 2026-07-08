@@ -1,0 +1,32 @@
+---
+description: Stamp every agent code edit with model, date, summary, hash
+alwaysApply: true
+globs: "**/*.{gd,tscn,tres,tmx,tsx,py,sh,json,cfg,tscn,gdshader,md}"
+---
+
+# agentstamp
+
+When you **create or edit** a tracked file, add one stamp line **immediately above** each logical changed block (or once at file top for new/small files):
+
+```
+# agent: <model> | <YYYY-MM-DD> | <≤8 words> | <6-char hash>
+```
+
+Fields:
+- **model**: your model id (e.g. `composer-2.5`)
+- **date**: ISO date
+- **summary**: high-level what changed, no paths
+- **hash**: first 6 hex chars of SHA256(`summary + filepath`)
+
+Use `#`, `//`, or `/* */` per language. One stamp per logical change region.
+
+**Skip only:** `.godot/`, `.import/`, generated/vendor assets, lockfiles, pure formatting-only diffs.
+
+Example (GDScript):
+
+```gdscript
+# agent: composer-2.5 | 2026-07-07 | two-layer tilemap gen | a1b2c3
+extends TileMapLayer
+```
+
+Do not finish a coding task without stamps on files you modified.

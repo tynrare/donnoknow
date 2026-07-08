@@ -1,11 +1,28 @@
+# agent: composer-2.5 | 2026-07-07 | manifest grid 24 cols | f8a9b0
 extends RefCounted
 
 const GenWfc := preload("res://scripts/generator/wfc.gd")
+const GenStitch := preload("res://scripts/generator/stitch.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
+const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
+const GenTmx := preload("res://scripts/generator/tmx.gd")
+const GenValidate := preload("res://scripts/generator/validate.gd")
 
 const DEFAULT_MANIFEST := "res://assets/tiles/adve/manifest.json"
 const TILED_GID_MASK := 0x1FFFFFFF
+
+
+static func default_options() -> Dictionary:
+	return {
+		"gen_method": "wfc",
+		"strict_patterns": false,
+		"use_patterns": false,
+		"backtrack_depth": 8,
+		"tile_bias": {},
+		"chunk_size": 8,
+		"repeat_penalty": 1.0,
+	}
 
 
 static func load_manifest(path: String = DEFAULT_MANIFEST) -> Dictionary:
@@ -15,12 +32,55 @@ static func load_manifest(path: String = DEFAULT_MANIFEST) -> Dictionary:
 	return data if data is Dictionary else {}
 
 
+static func columns(manifest: Dictionary) -> int:
+	return int(manifest.get("columns", 0))
+
+
+static func rows(manifest: Dictionary) -> int:
+	return int(manifest.get("rows", 0))
+
+
 static func tile_count(manifest: Dictionary) -> int:
 	if manifest.has("tile_count"):
 		return int(manifest.tile_count)
-	var cols: int = manifest.get("columns", 16)
-	var rows: int = manifest.get("rows", 16)
-	return cols * rows
+	var cols: int = columns(manifest)
+	var row_count: int = rows(manifest)
+	if cols > 0 and row_count > 0:
+		return cols * row_count
+	return 0
+
+
+static func map_size(manifest: Dictionary) -> Vector2i:
+	var w: int = int(manifest.get("map_width", 0))
+	var h: int = int(manifest.get("map_height", 0))
+	if w > 0 and h > 0:
+		return Vector2i(w, h)
+	var maps: Array = manifest.get("maps", [])
+	if not maps.is_empty():
+		return GenTmx.read_map_size(str(maps[0]))
+	return Vector2i(0, 0)
+
+
+static func gid_to_local(manifest: Dictionary, gid: int) -> int:
+	return normalize_gid(gid) - int(manifest.get("first_gid", 1))
+
+
+static func local_to_gid(manifest: Dictionary, local: int) -> int:
+	return int(manifest.get("first_gid", 1)) + local
+
+
+static func atlas_to_local(manifest: Dictionary, atlas: Vector2i) -> int:
+	var cols: int = columns(manifest)
+	if cols <= 0:
+		return -1
+	return atlas.y * cols + atlas.x
+
+
+static func local_to_atlas(manifest: Dictionary, local: int) -> Vector2i:
+	var cols: int = columns(manifest)
+	if cols <= 0 or local < 0:
+		return Vector2i(-1, -1)
+	return Vector2i(local % cols, local / cols)
 
 
 static func normalize_gid(raw: int) -> int:
@@ -28,18 +88,14 @@ static func normalize_gid(raw: int) -> int:
 
 
 static func is_valid_gid(manifest: Dictionary, gid: int) -> bool:
-	var first_gid: int = manifest.get("first_gid", 1)
-	var local := normalize_gid(gid) - first_gid
+	var local := gid_to_local(manifest, gid)
 	return local >= 0 and local < tile_count(manifest)
 
 
 static func gid_to_atlas(manifest: Dictionary, gid: int) -> Vector2i:
 	if not is_valid_gid(manifest, gid):
 		return Vector2i(-1, -1)
-	var first_gid: int = manifest.get("first_gid", 1)
-	var cols: int = manifest.get("columns", 16)
-	var local := normalize_gid(gid) - first_gid
-	return Vector2i(local % cols, local / cols)
+	return local_to_atlas(manifest, gid_to_local(manifest, gid))
 
 
 static func apply_to_layer(layer: TileMapLayer, manifest: Dictionary, gids: PackedInt32Array, width: int) -> void:
@@ -92,6 +148,32 @@ static func _apply_gids(
 		layer.set_cell(cell, source_id, atlas)
 
 
+static func paint_cell(
+	layer: TileMapLayer,
+	manifest: Dictionary,
+	bounds: Rect2i,
+	width: int,
+	idx: int,
+	gid: int,
+	constraints: Dictionary,
+) -> void:
+	if constraints.has("modes"):
+		match constraints.modes[idx]:
+			GenConstraints.Mode.FIXED:
+				return
+			GenConstraints.Mode.FORBID:
+				layer.erase_cell(bounds.position + Vector2i(idx % width, idx / width))
+				return
+	var cell := bounds.position + Vector2i(idx % width, idx / width)
+	if gid <= 0:
+		layer.erase_cell(cell)
+		return
+	var atlas := gid_to_atlas(manifest, gid)
+	if atlas.x < 0:
+		return
+	layer.set_cell(cell, manifest.get("source_id", 0), atlas)
+
+
 static func gids_from_layer(
 	layer: TileMapLayer,
 	manifest: Dictionary,
@@ -103,7 +185,9 @@ static func gids_from_layer(
 	out.resize(width * height)
 	out.fill(0)
 	var first_gid: int = manifest.get("first_gid", 1)
-	var cols: int = manifest.get("columns", 16)
+	var cols: int = columns(manifest)
+	if cols <= 0:
+		return out
 	for y in height:
 		for x in width:
 			var atlas := layer.get_cell_atlas_coords(origin + Vector2i(x, y))
@@ -113,18 +197,97 @@ static func gids_from_layer(
 	return out
 
 
+static func validate_manifest(manifest: Dictionary) -> String:
+	return GenValidate.first_error(GenValidate.validate_setup(manifest))
+
+
+static func validate_rules_grid(manifest: Dictionary, rules: Dictionary) -> String:
+	var report := GenValidate.validate_setup(manifest, rules)
+	return GenValidate.first_error(report)
+
+
+static func validate_setup(
+	manifest: Dictionary,
+	rules: Dictionary = {},
+	constraints: Dictionary = {},
+) -> Dictionary:
+	return GenValidate.validate_setup(manifest, rules, constraints)
+
+
+static func format_report(report: Dictionary) -> String:
+	return GenValidate.format_report(report)
+
+
 static func generate(
 	manifest: Dictionary,
 	rules: Dictionary,
 	constraints: Dictionary,
 	seed: int = 0,
+	max_restarts: int = 32,
+	options: Dictionary = {},
 ) -> Dictionary:
-	return GenWfc.generate(rules, constraints, seed, manifest)
+	var opts := default_options()
+	for key in options:
+		opts[key] = options[key]
+	if max_restarts == null:
+		max_restarts = 32
+
+	var err: String = validate_manifest(manifest)
+	if not err.is_empty():
+		return {"ok": false, "error": err}
+
+	err = validate_rules_grid(manifest, rules)
+	if not err.is_empty():
+		return {"ok": false, "error": err}
+
+	var method: String = str(opts.get("gen_method", "wfc"))
+	if method == "chunk_stitch":
+		return GenStitch.generate(rules, constraints, seed, manifest, opts)
+
+	return GenWfc.generate(rules, constraints, seed, manifest, max_restarts, opts)
 
 
-static func analyze_manifest(manifest: Dictionary) -> Dictionary:
+static func create_job(
+	manifest: Dictionary,
+	rules: Dictionary,
+	constraints: Dictionary,
+	seed: int = 0,
+	max_restarts: int = 32,
+	options: Dictionary = {},
+) -> GenWfcJob:
+	if max_restarts == null:
+		max_restarts = 32
+	var opts := default_options()
+	for key in options:
+		opts[key] = options[key]
+	return GenWfcJob.new(rules, constraints, manifest, seed, max_restarts, opts)
+
+
+static func finalize_job(
+	job: GenWfcJob,
+	rules: Dictionary,
+	constraints: Dictionary,
+	seed: int,
+	manifest: Dictionary,
+	options: Dictionary = {},
+) -> Dictionary:
+	var step := {
+		"ok": not job.cancelled,
+		"gids": job.out,
+		"seed": job.base_seed + job.attempt - 1,
+		"attempts": job.attempt,
+		"backtracks": job.backtracks_used,
+		"method": "wfc_partial",
+		"cancelled": job.cancelled,
+	}
+	return GenWfc._finalize_result(step, rules, constraints, seed, manifest, options)
+
+
+static func analyze_manifest(manifest: Dictionary, chunk_size: int = 8) -> Dictionary:
 	var maps: Array = manifest.get("maps", [])
-	return GenRules.analyze_maps(maps, 1, manifest)
+	var analyze: Dictionary = manifest.get("analyze", {})
+	var min_adj: int = maxi(int(analyze.get("min_adj_count", 1)), 1)
+	return GenRules.analyze_maps(maps, min_adj, manifest, chunk_size)
 
 
 static func save_rules(manifest: Dictionary, rules: Dictionary) -> Error:
