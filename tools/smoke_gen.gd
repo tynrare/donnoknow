@@ -67,10 +67,8 @@ func _init() -> void:
 
 	var constraints := GenConstraints.empty(width, height)
 	var options: Dictionary = GenService.default_options()
-	options.gen_method = "wfc"
-
 	var t0 := Time.get_ticks_msec()
-	var job := GenWfcJob.new(rules, constraints, manifest, 42, 8, options)
+	var job := GenWfcJob.new(rules, constraints, manifest, 42, options)
 	var steps := 0
 	while not job.finished and steps < width * height * 4:
 		if Time.get_ticks_msec() > deadline:

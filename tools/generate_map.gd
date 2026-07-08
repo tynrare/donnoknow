@@ -31,11 +31,9 @@ func _init() -> void:
 
 	var constraints := GenConstraints.empty(width, height)
 	var options: Dictionary = GenService.default_options()
-	if args.has("method"):
-		options.gen_method = args.method
-	var result := GenService.generate(manifest, rules, constraints, seed, 32, options)
+	var result := GenService.generate(manifest, rules, constraints, seed, options)
 	if not result.ok:
-		push_error("Generate failed: %s (after %d attempts)" % [result.get("error", "?"), result.get("attempts", 0)])
+		push_error("Generate failed: %s" % result.get("error", "?"))
 		quit(1)
 		return
 
@@ -71,6 +69,4 @@ func _parse_args() -> Dictionary:
 			out.height = OS.get_cmdline_user_args()[i + 1].to_int()
 		elif a == "--out" and i + 1 < OS.get_cmdline_user_args().size():
 			out.out = OS.get_cmdline_user_args()[i + 1]
-		elif a == "--method" and i + 1 < OS.get_cmdline_user_args().size():
-			out.method = OS.get_cmdline_user_args()[i + 1]
 	return out

@@ -15,7 +15,7 @@ func _init() -> void:
 	var full := GenService.map_size(manifest)
 	var full_c := GenConstraints.empty(full.x, full.y)
 	GenConstraints.set_fixed(full_c, 15, 5, 27)
-	var full_job := GenWfcJob.new(rules, full_c, manifest, 42, 4, GenService.default_options())
+	var full_job := GenWfcJob.new(rules, full_c, manifest, 42, GenService.default_options())
 	if not full_job.ready:
 		push_error("FAIL full %dx%d: job not ready with fixed GID 27 at (15,5)" % [full.x, full.y])
 		quit(1)

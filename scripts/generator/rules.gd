@@ -5,8 +5,6 @@ const GenTmx := preload("res://scripts/generator/tmx.gd")
 const GenAtlasAnalyze := preload("res://scripts/generator/atlas_analyze.gd")
 
 const DIRS := GenTmx.DIRS
-const CTX_UNK := 0
-const DEFAULT_CHUNK_SIZE := 8
 const DEFAULT_EDGE_GAP_MAX := 4
 const DEFAULT_MAX_ADJ_MATES := 16
 const TILED_GID_MASK := 0x1FFFFFFF
@@ -22,21 +20,13 @@ static func analyze_maps(
 	maps: Array,
 	min_adj_count: int = 1,
 	manifest: Dictionary = {},
-	chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Dictionary:
 	var tile_counts: Dictionary = {}
 	var map_adjacency: Dictionary = {}
-	var chunks: Array = []
-	var chunk_set := {}
-	var chunk_counts: Dictionary = {}
-	var chunk_compat: Dictionary = {}
 	var total := 0
 	var analyze: Dictionary = manifest.get("analyze", {})
 	var use_maps: bool = analyze.get("maps", true)
-	var use_chunks: bool = analyze.get("chunks", false)
 	var use_tileset_edges: bool = analyze.get("tileset_edges", false)
-	var use_patterns: bool = bool(analyze.get("patterns_3x3", false))
-	var use_context: bool = bool(analyze.get("context_weights", false))
 	var edge_weight_raw: float = float(analyze.get("tileset_edges_weight", 0.35))
 	var edge_weight: int = maxi(int(round(edge_weight_raw * 10.0)), 1) if edge_weight_raw > 0.0 else 0
 	var min_adj: int = maxi(int(analyze.get("min_adj_count", min_adj_count)), 1)
@@ -48,8 +38,6 @@ static func analyze_maps(
 		"tileset_edges": use_tileset_edges,
 		"min_adj_count": min_adj,
 		"max_adj_mates": max_adj_mates,
-		"patterns_3x3": use_patterns,
-		"context_weights": use_context,
 		"color_quantize": int(analyze.get("color_quantize", 24)),
 		"edge_quantize": int(analyze.get("edge_quantize", 32)),
 		"edge_match": str(analyze.get("edge_match", "exact")),
@@ -66,8 +54,6 @@ static func analyze_maps(
 			if map.is_empty():
 				continue
 			_scan_map(map, tile_counts, map_adjacency, manifest)
-			if use_chunks:
-				_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
 			total += map.width * map.height
 
 	var adjacency: Dictionary = {}
@@ -122,10 +108,6 @@ static func analyze_maps(
 		"pick_weights": pick_weights,
 		"pick_weight_mode": "log",
 		"adjacency": adjacency,
-		"chunks": chunks,
-		"chunk_counts": chunk_counts,
-		"chunk_compat": chunk_compat,
-		"chunk_size": chunk_size,
 		"tile_classes": tile_classes,
 		"maps": maps,
 		"sources": sources,
@@ -140,7 +122,6 @@ static func analyze_maps(
 		"stats": {
 			"cells": total,
 			"unique_tiles": tile_counts.size(),
-			"chunks": chunks.size(),
 			"tile_classes": tile_classes.size(),
 			"alias_max_class_size": int(analyze.get("alias_max_class_size", 4)),
 			"max_adj_mates": max_adj_mates,
@@ -206,138 +187,11 @@ static func tile_weight(rules: Dictionary, gid: int) -> float:
 	return float(rules.get("tile_weights", {}).get(str(gid), 0.001))
 
 
-static func pick_weight(rules: Dictionary, gid: int, tile_bias: Dictionary = {}) -> float:
+static func pick_weight(rules: Dictionary, gid: int) -> float:
 	var base := float(rules.get("pick_weights", {}).get(str(gid), 0.0))
 	if base <= 0.0:
 		base = tile_weight(rules, gid)
-	var bias_key := str(gid)
-	if tile_bias.has(bias_key):
-		base *= float(tile_bias[bias_key])
-	elif tile_bias.has(gid):
-		base *= float(tile_bias[gid])
 	return maxf(base, 0.0001)
-
-
-static func context_weight(rules: Dictionary, gid: int, ctx: PackedInt32Array) -> float:
-	var bucket: Variant = rules.get("context_weights", {}).get(_ctx_key(ctx), {})
-	if bucket is Dictionary:
-		return float(bucket.get(str(gid), 0.0))
-	return 0.0
-
-
-static func patterns_3x3(rules: Dictionary) -> Array:
-	var raw: Variant = rules.get("patterns_3x3", [])
-	return raw if raw is Array else []
-
-
-static func chunks(rules: Dictionary) -> Array:
-	var raw: Variant = rules.get("chunks", [])
-	return raw if raw is Array else []
-
-
-static func chunk_size(rules: Dictionary) -> int:
-	return int(rules.get("chunk_size", DEFAULT_CHUNK_SIZE))
-
-
-static func chunk_compat(rules: Dictionary) -> Dictionary:
-	var raw: Variant = rules.get("chunk_compat", {})
-	return raw if raw is Dictionary else {}
-
-
-static func chunk_count_for(rules: Dictionary, chunk_id: String) -> int:
-	return int(rules.get("chunk_counts", {}).get(chunk_id, 1))
-
-
-static func build_pattern_index(patterns: Array, pattern_counts: Dictionary = {}) -> Dictionary:
-	var index := {}
-	for pat_v in patterns:
-		var pat: PackedInt32Array = _coerce_pattern(pat_v)
-		if pat.size() != 9:
-			continue
-		var freq: float = 1.0
-		var key := _pattern_key(pat)
-		if pattern_counts.has(key):
-			freq = float(pattern_counts[key])
-		var neighbor_mask := 0
-		for i in 9:
-			if i != 4 and pat[i] > 0:
-				neighbor_mask |= 1 << i
-		var mask: int = neighbor_mask
-		while mask > 0:
-			var partial_key := _partial_pattern_key(pat, mask)
-			if not index.has(partial_key):
-				index[partial_key] = {}
-			var center: int = pat[4]
-			index[partial_key][center] = index[partial_key].get(center, 0.0) + freq
-			mask = (mask - 1) & neighbor_mask
-	return index
-
-
-static func _partial_pattern_key(pat: PackedInt32Array, mask: int) -> String:
-	var parts: Array = []
-	for i in 9:
-		if i == 4:
-			parts.append("_")
-		elif mask & (1 << i):
-			parts.append(str(pat[i]))
-		else:
-			parts.append("*")
-	return ",".join(parts)
-
-
-static func _coerce_pattern(pat_v: Variant) -> PackedInt32Array:
-	if pat_v is PackedInt32Array:
-		return pat_v
-	if pat_v is Array:
-		var pat := PackedInt32Array()
-		for gid in pat_v:
-			pat.append(int(gid))
-		return pat
-	return PackedInt32Array()
-
-
-static func _ctx_key(ctx: PackedInt32Array) -> String:
-	return "%d,%d,%d,%d" % [ctx[0], ctx[1], ctx[2], ctx[3]]
-
-
-static func build_context_at(
-	out: PackedInt32Array,
-	done: PackedByteArray,
-	idx: int,
-	w: int,
-	h: int,
-) -> PackedInt32Array:
-	var x := idx % w
-	var y := idx / w
-	var ctx := PackedInt32Array()
-	ctx.resize(4)
-	ctx.fill(CTX_UNK)
-
-	var north := Vector2i(x, y - 1)
-	if north.y >= 0:
-		var ni: int = north.y * w + north.x
-		if done[ni] and out[ni] > 0:
-			ctx[0] = out[ni]
-
-	var east := Vector2i(x + 1, y)
-	if east.x < w:
-		var ni: int = east.y * w + east.x
-		if done[ni] and out[ni] > 0:
-			ctx[1] = out[ni]
-
-	var south := Vector2i(x, y + 1)
-	if south.y < h:
-		var ni: int = south.y * w + south.x
-		if done[ni] and out[ni] > 0:
-			ctx[2] = out[ni]
-
-	var west := Vector2i(x - 1, y)
-	if west.x >= 0:
-		var ni: int = west.y * w + west.x
-		if done[ni] and out[ni] > 0:
-			ctx[3] = out[ni]
-
-	return ctx
 
 
 static func _merge_edge_gap_fill(
@@ -461,197 +315,6 @@ static func _scan_map(map: Dictionary, tile_counts: Dictionary, adjacency: Dicti
 				var b_w := _cell_gid(gids[y * w + x - 1], manifest)
 				if b_w > 0:
 					adjacency[str(a)]["west"][str(b_w)] = adjacency[str(a)]["west"].get(str(b_w), 0) + 1
-
-
-static func _scan_context(map: Dictionary, context_weights: Dictionary, manifest: Dictionary) -> void:
-	var w: int = map.width
-	var h: int = map.height
-	var gids: PackedInt32Array = map.gids
-
-	for y in h:
-		for x in w:
-			var center := _cell_gid(gids[y * w + x], manifest)
-			if center <= 0:
-				continue
-			var neighbors := PackedInt32Array()
-			neighbors.resize(4)
-			neighbors[0] = _neighbor_gid(gids, w, h, x, y - 1, manifest)
-			neighbors[1] = _neighbor_gid(gids, w, h, x + 1, y, manifest)
-			neighbors[2] = _neighbor_gid(gids, w, h, x, y + 1, manifest)
-			neighbors[3] = _neighbor_gid(gids, w, h, x - 1, y, manifest)
-
-			for mask in 16:
-				var ctx := PackedInt32Array()
-				ctx.resize(4)
-				ctx.fill(CTX_UNK)
-				if mask & 1:
-					ctx[0] = neighbors[0]
-				if mask & 2:
-					ctx[1] = neighbors[1]
-				if mask & 4:
-					ctx[2] = neighbors[2]
-				if mask & 8:
-					ctx[3] = neighbors[3]
-				_add_context(context_weights, ctx, center)
-
-
-static func _scan_patterns_3x3(
-	map: Dictionary,
-	patterns: Array,
-	pattern_counts: Dictionary,
-	manifest: Dictionary,
-) -> void:
-	var w: int = map.width
-	var h: int = map.height
-	var gids: PackedInt32Array = map.gids
-	var seen := {}
-
-	for y in h - 2:
-		for x in w - 2:
-			var pat := PackedInt32Array()
-			pat.resize(9)
-			var valid := true
-			for dy in 3:
-				for dx in 3:
-					var gid := _cell_gid(gids[(y + dy) * w + (x + dx)], manifest)
-					if gid <= 0:
-						valid = false
-						break
-					pat[dy * 3 + dx] = gid
-				if not valid:
-					break
-			if not valid:
-				continue
-			var key := _pattern_key(pat)
-			pattern_counts[key] = int(pattern_counts.get(key, 0)) + 1
-			if seen.has(key):
-				continue
-			seen[key] = true
-			var saved: Array = []
-			for gid in pat:
-				saved.append(gid)
-			patterns.append(saved)
-
-
-static func _scan_chunks(
-	map: Dictionary,
-	chunks: Array,
-	chunk_set: Dictionary,
-	chunk_counts: Dictionary,
-	chunk_compat: Dictionary,
-	manifest: Dictionary,
-	chunk_size: int,
-) -> void:
-	var w: int = map.width
-	var h: int = map.height
-	var gids: PackedInt32Array = map.gids
-	var cs: int = maxi(chunk_size, 1)
-
-	for cy in ceili(float(h) / float(cs)):
-		for cx in ceili(float(w) / float(cs)):
-			var tiles := PackedInt32Array()
-			tiles.resize(cs * cs)
-			tiles.fill(0)
-			var any := false
-			for dy in cs:
-				for dx in cs:
-					var x: int = cx * cs + dx
-					var y: int = cy * cs + dy
-					if x >= w or y >= h:
-						continue
-					var gid := _cell_gid(gids[y * w + x], manifest)
-					tiles[dy * cs + dx] = gid
-					if gid > 0:
-						any = true
-			if not any:
-				continue
-			var id := _chunk_id(tiles)
-			chunk_counts[id] = int(chunk_counts.get(id, 0)) + 1
-			if not chunk_set.has(id):
-				chunk_set[id] = true
-				chunks.append({"id": id, "size": cs, "tiles": _packed_to_array(tiles)})
-				chunk_compat[id] = {
-					"north": _chunk_edge(tiles, cs, "north"),
-					"east": _chunk_edge(tiles, cs, "east"),
-					"south": _chunk_edge(tiles, cs, "south"),
-					"west": _chunk_edge(tiles, cs, "west"),
-				}
-
-
-static func _chunk_id(tiles: PackedInt32Array) -> String:
-	var parts: Array = []
-	for gid in tiles:
-		parts.append(str(gid))
-	return ",".join(parts)
-
-
-static func _chunk_edge(tiles: PackedInt32Array, cs: int, edge: String) -> Array:
-	var row: Array = []
-	match edge:
-		"north":
-			for x in cs:
-				row.append(tiles[x])
-		"south":
-			for x in cs:
-				row.append(tiles[(cs - 1) * cs + x])
-		"west":
-			for y in cs:
-				row.append(tiles[y * cs])
-		"east":
-			for y in cs:
-				row.append(tiles[y * cs + cs - 1])
-	return row
-
-
-static func _packed_to_array(tiles: PackedInt32Array) -> Array:
-	var out: Array = []
-	for gid in tiles:
-		out.append(gid)
-	return out
-
-
-static func _pattern_key(pat: PackedInt32Array) -> String:
-	var parts: Array = []
-	for gid in pat:
-		parts.append(str(gid))
-	return ",".join(parts)
-
-
-static func _neighbor_gid(
-	gids: PackedInt32Array,
-	w: int,
-	h: int,
-	x: int,
-	y: int,
-	manifest: Dictionary,
-) -> int:
-	if x < 0 or y < 0 or x >= w or y >= h:
-		return CTX_UNK
-	return _cell_gid(gids[y * w + x], manifest)
-
-
-static func _add_context(context_weights: Dictionary, ctx: PackedInt32Array, center: int) -> void:
-	var key := _ctx_key(ctx)
-	if not context_weights.has(key):
-		context_weights[key] = {}
-	var bucket: Dictionary = context_weights[key]
-	bucket[str(center)] = int(bucket.get(str(center), 0)) + 1
-
-
-static func _normalize_context_weights(context_weights: Dictionary, min_total: int) -> void:
-	var erase_keys: Array = []
-	for key in context_weights:
-		var bucket: Dictionary = context_weights[key]
-		var total := 0
-		for gid_key in bucket:
-			total += int(bucket[gid_key])
-		if total < min_total:
-			erase_keys.append(key)
-			continue
-		for gid_key in bucket:
-			bucket[gid_key] = float(bucket[gid_key]) / float(total)
-	for key in erase_keys:
-		context_weights.erase(key)
 
 
 static func _cell_gid(raw: int, manifest: Dictionary) -> int:

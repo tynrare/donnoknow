@@ -5,7 +5,6 @@
 		"alias_max_col_distance": 1,
 		"alias_max_row_distance": 1,
 		"alias_threshold": 0.85,
-		"chunks": false,
 		"color_quantize": 24,
 		"edge_gap_max_neighbors": 4,
 		"edge_match": "exact",
@@ -13,9 +12,6 @@
 		"maps": true,
 		"max_adj_mates": 16,
 		"min_adj_count": 2,
-		"patterns_3x3": false,
-		"context_weights": false,
-		"save_topology": false,
 		"tileset_edges": true,
 		"tileset_edges_weight": 0.35,
 		"trim_self_adj": true

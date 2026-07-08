@@ -1,6 +1,6 @@
 extends SceneTree
 
-const GenWfc := preload("res://scripts/generator/wfc.gd")
+const GenWfc := preload("res://scripts/generator/wfc_core.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
 const GenService := preload("res://scripts/generator/service.gd")
@@ -15,7 +15,7 @@ func _init() -> void:
 	var rules := GenRules.load(manifest.get("rules", ""))
 	var tiles := GenRules.generatable_tiles(rules, manifest)
 	tiles = GenWfc._merge_fixed_tiles(tiles, GenConstraints.empty(1, 1))
-	var ctx := GenWfc._build_context(rules, tiles, false)
+	var ctx := GenWfc._build_context(rules, tiles)
 
 	_test_one_hop_narrows_neighbors(ctx, rules, deadline)
 	_test_full_propagate_from_fixed(ctx, rules, deadline)

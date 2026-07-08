@@ -5,28 +5,24 @@ extends TileMapLayer
 const GenService := preload("res://scripts/generator/service.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
-const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
 
 const GENERATED_NAME := "Generated"
 
 enum GenPhase { IDLE, PREP, JOB_INIT, RUNNING }
 
+const FLUSH_INTERVAL_MS := 120
+
 @export var manifest_path: String = "res://assets/tiles/adve/manifest.json"
 @export var rules_path: String = "res://resources/generator/adve.rules.json"
 @export var map_seed: int = 0
-@export var max_restarts: int = 8
 @export var steps_per_frame: int = 4
 @export var bounds: Rect2i = Rect2i(0, 0, 54, 35)
 @export var context_halo: int = 1
-@export var backtrack_depth: int = 8
 @export var repeat_penalty: float = 1.0
-@export var tile_bias: Dictionary = {}
-@export var chunk_size: int = 8
-@export var update_interval_ms: int = 120
 
 const BOUNDS_HANDLE_RADIUS := 2.0
 
-var _job: GenWfcJob = null
+var _job = null
 var _manifest: Dictionary = {}
 var _constraints: Dictionary = {}
 var _rules: Dictionary = {}
@@ -35,7 +31,6 @@ var _gen_height: int = 0
 var _gen_halo: int = 0
 var _gen_origin: Vector2i = Vector2i.ZERO
 var _gen_options: Dictionary = {}
-var _gen_restarts: int = 32
 var _gen_phase: int = GenPhase.IDLE
 var _replace_inner: bool = false
 var _pending_flush: bool = false
@@ -123,12 +118,7 @@ func _is_selected_in_editor() -> bool:
 
 func _gen_options_dict() -> Dictionary:
 	return {
-		"use_patterns": false,
-		"backtrack_depth": backtrack_depth,
-		"max_restarts": max_restarts,
 		"repeat_penalty": repeat_penalty,
-		"tile_bias": tile_bias,
-		"chunk_size": chunk_size,
 	}
 
 
@@ -236,8 +226,7 @@ func _analyze_rules() -> void:
 	if not pre.get("ok", false):
 		push_error("ProceduralTilemap: %s" % GenService.validate_manifest(manifest))
 		return
-	var cs: int = 8 if chunk_size == null else chunk_size
-	var rules: Dictionary = GenService.analyze_manifest(manifest, cs)
+	var rules: Dictionary = GenService.analyze_manifest(manifest)
 	var path: String = rules_path if not rules_path.is_empty() else str(manifest.get("rules", ""))
 	var err: Error = GenRules.save(path, rules)
 	if err != OK:
@@ -247,10 +236,9 @@ func _analyze_rules() -> void:
 	var grid: Dictionary = rules.get("grid", {})
 	var sources: Dictionary = rules.get("sources", {})
 	print(
-		"ProceduralTilemap: analyzed %d cells, %d tiles, %d chunks, grid=%dx%d map=%dx%d sources=%s → %s" % [
+		"ProceduralTilemap: analyzed %d cells, %d tiles, grid=%dx%d map=%dx%d sources=%s → %s" % [
 			int(stats.get("cells", 0)),
 			int(stats.get("unique_tiles", 0)),
-			int(stats.get("chunks", 0)),
 			int(grid.get("columns", 0)),
 			int(grid.get("rows", 0)),
 			int(grid.get("map_width", 0)),
@@ -368,7 +356,6 @@ func _prep_generation() -> bool:
 	_gen_halo = halo
 	_gen_origin = grid_origin
 	_gen_options = _gen_options_dict()
-	_gen_restarts = 32 if max_restarts == null else max_restarts
 
 	_sync_fixed_paint_to_generated(generated, manifest, constraints, grid_w, grid_h)
 	_flush_generated(false)
@@ -406,7 +393,6 @@ func _reset_generation_state() -> void:
 	_gen_halo = 0
 	_gen_origin = Vector2i.ZERO
 	_gen_options = {}
-	_gen_restarts = 32
 	_gen_phase = GenPhase.IDLE
 	_replace_inner = false
 	_pending_flush = false
@@ -486,7 +472,7 @@ func _paint_step_cell(generated: TileMapLayer, idx: int, gid: int) -> void:
 func _flush_generated(force: bool) -> void:
 	if not _pending_flush:
 		return
-	var interval: int = 120 if update_interval_ms == null else maxi(update_interval_ms, 16)
+	var interval: int = FLUSH_INTERVAL_MS
 	var now := Time.get_ticks_msec()
 	if not force and now - _last_flush_ms < interval:
 		return
@@ -512,15 +498,13 @@ func _apply_generated_flush() -> void:
 
 func _log_result(result: Dictionary, w: int, h: int) -> void:
 	print(
-		"ProceduralTilemap: %dx%d method=%s filled=%d/%d seed=%d attempts=%d backtracks=%d" % [
+		"ProceduralTilemap: %dx%d method=%s filled=%d/%d seed=%d" % [
 			w,
 			h,
 			str(result.get("method", "?")),
 			int(result.get("filled", 0)),
 			int(result.get("total", 0)),
 			int(result.get("seed", 0)),
-			int(result.get("attempts", 0)),
-			int(result.get("backtracks", 0)),
 		]
 	)
 
@@ -545,10 +529,14 @@ func _process(_delta: float) -> void:
 func _spawn_job() -> void:
 	var t0 := Time.get_ticks_msec()
 	_job = GenService.create_job(
-		_manifest, _rules, _constraints, map_seed, _gen_restarts, _gen_options
+		_manifest, _rules, _constraints, map_seed, _gen_options
 	)
 	var ms := Time.get_ticks_msec() - t0
 	print("ProceduralTilemap: job init %d ms" % ms)
+	if _job == null:
+		push_error("ProceduralTilemap: failed to create job (script load error)")
+		_reset_generation_state()
+		return
 	if _job.finished or not _job.ready:
 		push_error("ProceduralTilemap: failed to start job")
 		_reset_generation_state()

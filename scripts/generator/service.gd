@@ -2,9 +2,9 @@
 extends RefCounted
 
 const GenWfc := preload("res://scripts/generator/wfc.gd")
+const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
-const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
 const GenTmx := preload("res://scripts/generator/tmx.gd")
 const GenValidate := preload("res://scripts/generator/validate.gd")
 
@@ -239,7 +239,7 @@ static func create_job(
 	constraints: Dictionary,
 	seed: int = 0,
 	options: Dictionary = {},
-) -> GenWfcJob:
+):
 	var opts := default_options()
 	for key in options:
 		opts[key] = options[key]
@@ -247,7 +247,7 @@ static func create_job(
 
 
 static func finalize_job(
-	job: GenWfcJob,
+	job,
 	rules: Dictionary,
 	constraints: Dictionary,
 	seed: int,

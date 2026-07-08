@@ -1,7 +1,7 @@
-# agent: composer-2.5 | 2026-07-08 | slim job skip-cell only | s4t5u6
+# agent: composer-2.5 | 2026-07-08 | preload wfc_core breaks cycle | e5f6a7
 extends RefCounted
 
-const GenWfc := preload("res://scripts/generator/wfc.gd")
+const Core := preload("res://scripts/generator/wfc_core.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
 
@@ -47,13 +47,13 @@ func _init(
 	repeat_penalty = clampf(float(options.get("repeat_penalty", 1.0)), 0.0, 1.0)
 
 	var tiles := GenRules.generatable_tiles(rules, p_manifest)
-	tiles = GenWfc._merge_fixed_tiles(tiles, constraints)
+	tiles = Core._merge_fixed_tiles(tiles, constraints)
 	if tiles.is_empty():
 		finished = true
 		return
 
-	ctx = GenWfc._build_context(rules, tiles)
-	GenWfc._augment_compat_from_constraints(constraints, ctx)
+	ctx = Core._build_context(rules, tiles)
+	Core._augment_compat_from_constraints(constraints, ctx)
 	w = constraints.width
 	h = constraints.height
 	n = w * h
@@ -92,7 +92,7 @@ func step() -> Dictionary:
 			_retry_cell = -1
 			best = -1
 	if best < 0:
-		best = GenWfc._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
+		best = Core._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
 
 	if best < 0:
 		return _finish_now(true, false)
@@ -100,10 +100,10 @@ func step() -> Dictionary:
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var exclude: Array = tried_picks.get(best, [])
-	if GenWfc.untried_domain_count(domains[best], exclude) == 0:
+	if Core.untried_domain_count(domains[best], exclude) == 0:
 		return _skip_cell(best)
 
-	var picked_idx: int = GenWfc._weighted_pick_idx(
+	var picked_idx: int = Core._weighted_pick_idx(
 		rules,
 		domains[best],
 		idx_to_gid,
@@ -128,19 +128,19 @@ func step() -> Dictionary:
 	out[best] = idx_to_gid[picked_idx]
 
 	var queue: Array = [best]
-	if not GenWfc._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
+	if not Core._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
 		done[best] = 0
 		out[best] = 0
 		domains[best] = prev_domain
 		domain_counts[best] = prev_count
 		_record_tried(best, picked_idx)
-		if not GenWfc.repropagate(
+		if not Core.repropagate(
 			domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
 		):
 			return _skip_cell(best)
 		_apply_exhausted_cells(count)
 		var tried: Array = tried_picks.get(best, [])
-		var remaining: int = GenWfc.untried_domain_count(prev_domain, tried)
+		var remaining: int = Core.untried_domain_count(prev_domain, tried)
 		if remaining > 0:
 			_retry_cell = best
 			return {"finished": false, "retry": true, "idx": best}
@@ -197,7 +197,7 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 	gids.resize(n)
 	for i in n:
 		gids[i] = out[i]
-	var filled: Dictionary = GenWfc._count_filled(gids, constraints)
+	var filled: Dictionary = Core._count_filled(gids, constraints)
 	var method := "wfc"
 	if filled.done < filled.generatable:
 		method = "wfc_partial"
@@ -268,19 +268,19 @@ func _start_attempt() -> void:
 					done[i] = 1
 					out[i] = seed_gid
 				else:
-					domains[i] = GenWfc._domain_copy(all_domain)
+					domains[i] = Core._domain_copy(all_domain)
 					domain_counts[i] = count
 					done[i] = 0
 
-	var seeds: Array = GenWfc._collect_propagate_seeds(constraints, done, out, w, h)
+	var seeds: Array = Core._collect_propagate_seeds(constraints, done, out, w, h)
 	if not seeds.is_empty():
-		GenWfc._propagate_one_hop(
+		Core._propagate_one_hop(
 			seeds, domains, domain_counts, done, out, constraints, w, h, ctx
 		)
 		for i in n:
 			if done[i]:
 				continue
 			if domain_counts[i] == 0:
-				domains[i] = GenWfc._domain_copy(all_domain)
+				domains[i] = Core._domain_copy(all_domain)
 				domain_counts[i] = count
 	ready = true

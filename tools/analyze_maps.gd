@@ -12,7 +12,7 @@ func _init() -> void:
 		quit(1)
 		return
 
-	var rules := GenService.analyze_manifest(manifest, 8)
+	var rules := GenService.analyze_manifest(manifest)
 	var err := GenService.save_rules(manifest, rules)
 	if err != OK:
 		push_error("Save failed: %s" % error_string(err))
@@ -23,11 +23,10 @@ func _init() -> void:
 	var grid: Dictionary = rules.get("grid", {})
 	var sources: Dictionary = rules.get("sources", {})
 	print(
-		"Saved %s | cells=%d unique_tiles=%d chunks=%d classes=%d grid=%dx%d map=%dx%d max_adj=%d sources=%s v=%d" % [
+		"Saved %s | cells=%d unique_tiles=%d classes=%d grid=%dx%d map=%dx%d max_adj=%d sources=%s v=%d" % [
 			manifest.rules,
 			stats.get("cells", 0),
 			stats.get("unique_tiles", 0),
-			stats.get("chunks", 0),
 			stats.get("tile_classes", 0),
 			grid.get("columns", 0),
 			grid.get("rows", 0),

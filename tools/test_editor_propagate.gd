@@ -3,7 +3,7 @@ extends SceneTree
 const GenService := preload("res://scripts/generator/service.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
-const GenWfc := preload("res://scripts/generator/wfc.gd")
+const GenWfc := preload("res://scripts/generator/wfc_core.gd")
 
 const DEADLINE_MS := 60_000
 
@@ -13,7 +13,7 @@ func _init() -> void:
 	var manifest := GenService.load_manifest("res://assets/tiles/adve/manifest.json")
 	var rules := GenRules.load(manifest.get("rules", ""))
 	var tiles := GenRules.generatable_tiles(rules, manifest)
-	var ctx := GenWfc._build_context(rules, tiles, true)
+	var ctx := GenWfc._build_context(rules, tiles)
 
 	_test_first_ring_expands(ctx, rules, deadline)
 	print("PASS editor propagation expands from fixed GID 27 on 54x35")
