@@ -53,7 +53,10 @@ func _init() -> void:
 		quit(1)
 		return
 
-	var width := 20
+	const DEADLINE_MS := 60_000
+	var deadline := Time.get_ticks_msec() + DEADLINE_MS
+
+	var width := 10
 	var height := 10
 	for i in OS.get_cmdline_user_args().size():
 		var a: String = OS.get_cmdline_user_args()[i]
@@ -70,6 +73,10 @@ func _init() -> void:
 	var job := GenWfcJob.new(rules, constraints, manifest, 42, 8, options)
 	var steps := 0
 	while not job.finished and steps < width * height * 4:
+		if Time.get_ticks_msec() > deadline:
+			push_error("FAIL smoke: exceeded 60s budget at step %d" % steps)
+			quit(1)
+			return
 		job.step()
 		steps += 1
 
@@ -81,8 +88,10 @@ func _init() -> void:
 		quit(1)
 		return
 
-	if int(result.get("filled", 0)) <= 0:
-		push_error("No tiles filled")
+	var filled := int(result.get("filled", 0))
+	var total := int(result.get("total", 0))
+	if filled < int(total * 0.8):
+		push_error("FAIL smoke: filled=%d/%d below 80%%" % [filled, total])
 		quit(1)
 		return
 

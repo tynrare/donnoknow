@@ -35,6 +35,7 @@ static func analyze_maps(
 	var total := 0
 	var analyze: Dictionary = manifest.get("analyze", {})
 	var use_maps: bool = analyze.get("maps", true)
+	var use_chunks: bool = analyze.get("chunks", false)
 	var use_tileset_edges: bool = analyze.get("tileset_edges", false)
 	var edge_weight_raw: float = float(analyze.get("tileset_edges_weight", 0.35))
 	var edge_weight: int = maxi(int(round(edge_weight_raw * 10.0)), 1) if edge_weight_raw > 0.0 else 0
@@ -63,7 +64,8 @@ static func analyze_maps(
 			_scan_map(map, tile_counts, adjacency, manifest)
 			_scan_context(map, context_weights, manifest)
 			_scan_patterns_3x3(map, patterns_3x3, pattern_counts, manifest)
-			_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
+			if use_chunks:
+				_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
 			total += map.width * map.height
 
 	_filter_adjacency(adjacency, min_adj)

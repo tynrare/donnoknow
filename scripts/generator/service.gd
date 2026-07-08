@@ -17,8 +17,9 @@ static func default_options() -> Dictionary:
 	return {
 		"gen_method": "wfc",
 		"strict_patterns": false,
-		"use_patterns": false,
+		"use_patterns": true,
 		"backtrack_depth": 8,
+		"max_restarts": 8,
 		"tile_bias": {},
 		"chunk_size": 8,
 		"repeat_penalty": 1.0,

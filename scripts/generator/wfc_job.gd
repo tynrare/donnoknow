@@ -4,6 +4,7 @@ extends RefCounted
 const GenWfc := preload("res://scripts/generator/wfc.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
+const GenDebugLog := preload("res://scripts/generator/debug_log.gd")
 
 var cancelled := false
 var finished := false
@@ -36,6 +37,8 @@ var use_patterns: bool = false
 var tile_bias: Dictionary = {}
 var repeat_penalty: float = 1.0
 var _initial_seed: PackedInt32Array = PackedInt32Array()
+var _retry_cell: int = -1
+var _exhausted_cells := {}
 
 
 func _init(
@@ -56,6 +59,9 @@ func _init(
 	use_patterns = bool(options.get("use_patterns", false))
 	tile_bias = options.get("tile_bias", {})
 	repeat_penalty = clampf(float(options.get("repeat_penalty", 1.0)), 0.0, 1.0)
+	var opt_restarts: Variant = options.get("max_restarts", null)
+	if opt_restarts != null:
+		max_restarts = int(opt_restarts)
 
 	var tiles := GenRules.generatable_tiles(rules, p_manifest)
 	tiles = GenWfc._merge_fixed_tiles(tiles, constraints)
@@ -98,7 +104,13 @@ func step() -> Dictionary:
 	if not ready:
 		return _restart_or_fail("fixed tile contradiction")
 
-	var best: int = GenWfc._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
+	var best: int = _retry_cell
+	if best >= 0:
+		if done[best] or domain_counts[best] == 0:
+			_retry_cell = -1
+			best = -1
+	if best < 0:
+		best = GenWfc._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
 	if best < 0 and best != -1:
 		return _handle_contradiction("contradiction")
 
@@ -113,6 +125,17 @@ func step() -> Dictionary:
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var exclude: Array = tried_picks.get(best, [])
+	if GenWfc.untried_domain_count(domains[best], exclude) == 0:
+		_retry_cell = -1
+		if collapse_stack.is_empty():
+			_exhausted_cells[best] = true
+			tried_picks.erase(best)
+			domain_counts[best] = 0
+			for t in count:
+				domains[best][t] = 0
+			return {"finished": false, "skipped": best}
+		return _handle_contradiction("propagate")
+
 	var picked_idx: int = GenWfc._weighted_pick_idx(
 		rules,
 		domains[best],
@@ -145,6 +168,49 @@ func step() -> Dictionary:
 		domains[best] = prev_domain
 		domain_counts[best] = prev_count
 		_record_tried(best, picked_idx)
+		if not GenWfc.repropagate(
+			domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
+		):
+			_retry_cell = -1
+			#region agent log
+			GenDebugLog.write(
+				"H6",
+				"wfc_job.gd:step",
+				"repropagate_fail",
+				{"attempt": attempt, "cell": best, "stack": collapse_stack.size()},
+			)
+			#endregion
+			return _restart_or_fail("propagate")
+		_apply_exhausted_cells(count)
+		var tried: Array = tried_picks.get(best, [])
+		var remaining: int = GenWfc.untried_domain_count(prev_domain, tried)
+		#region agent log
+		if remaining <= 0 or attempt <= 2:
+			GenDebugLog.write(
+				"H5",
+				"wfc_job.gd:step",
+				"propagate_fail",
+				{
+					"attempt": attempt,
+					"cell": best,
+					"picked_gid": idx_to_gid[picked_idx],
+					"domain_size": prev_count,
+					"tried": tried.size(),
+					"remaining": remaining,
+				},
+			)
+		#endregion
+		if remaining > 0:
+			_retry_cell = best
+			return {"finished": false, "retry": true, "idx": best}
+		_retry_cell = -1
+		if collapse_stack.is_empty():
+			_exhausted_cells[best] = true
+			tried_picks.erase(best)
+			domain_counts[best] = 0
+			for t in count:
+				domains[best][t] = 0
+			return {"finished": false, "skipped": best}
 		return _handle_contradiction("propagate")
 
 	collapse_stack.append({
@@ -155,6 +221,7 @@ func step() -> Dictionary:
 		"tile_idx": picked_idx,
 	})
 	tried_picks.erase(best)
+	_retry_cell = -1
 
 	return {
 		"finished": false,
@@ -180,6 +247,7 @@ func _handle_contradiction(_reason: String) -> Dictionary:
 		domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
 	):
 		return _restart_or_fail("contradiction")
+	_apply_exhausted_cells(ctx.count)
 
 	return {
 		"finished": false,
@@ -195,6 +263,13 @@ func _record_tried(idx: int, tile_idx: int) -> void:
 	tried_picks[idx].append(tile_idx)
 
 
+func _apply_exhausted_cells(count: int) -> void:
+	for idx in _exhausted_cells:
+		domain_counts[idx] = 0
+		for t in count:
+			domains[idx][t] = 0
+
+
 func _restart_or_fail(reason: String) -> Dictionary:
 	if attempt < max_restarts:
 		_start_attempt()
@@ -204,7 +279,8 @@ func _restart_or_fail(reason: String) -> Dictionary:
 			"attempt": attempt,
 			"seed": base_seed + attempt - 1,
 		}
-	return _finish_now(false, false, reason)
+	var filled: Dictionary = GenWfc._count_filled(out, constraints)
+	return _finish_now(filled.done > 0, false, reason)
 
 
 func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictionary:
@@ -217,9 +293,27 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 	var method := "wfc"
 	if filled.done < filled.generatable:
 		method = "wfc_partial"
+	var success: bool = (not was_cancelled) and (ok or int(filled.done) > 0)
+	#region agent log
+	GenDebugLog.write(
+		"H4",
+		"wfc_job.gd:_finish_now",
+		"job_finished",
+		{
+			"ok_param": ok,
+			"success": success,
+			"filled": filled.done,
+			"total": filled.generatable,
+			"attempts": attempt,
+			"backtracks": backtracks_used,
+			"method": method,
+			"reason": reason,
+		},
+	)
+	#endregion
 	return {
 		"finished": true,
-		"ok": ok and not was_cancelled,
+		"ok": success,
 		"cancelled": was_cancelled,
 		"gids": gids,
 		"seed": base_seed + attempt - 1,
@@ -239,6 +333,8 @@ func _start_attempt() -> void:
 	collapse_stack.clear()
 	tried_picks.clear()
 	backtracks_used = 0
+	_retry_cell = -1
+	_exhausted_cells.clear()
 
 	var count: int = ctx.count
 	var all_domain: PackedByteArray = ctx.all_domain
@@ -289,57 +385,53 @@ func _start_attempt() -> void:
 					domain_counts[i] = count
 					done[i] = 0
 
-	var queue: Array = []
+	var seeds: Array = []
 	for i in n:
 		if done[i] and out[i] > 0:
-			queue.append(i)
-
-	if not GenWfc._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
-		_restore_open_domains(constraints, domains, domain_counts, done, out, ctx)
+			seeds.append(i)
+	var init_mode := "none"
+	var repaired := 0
+	if not seeds.is_empty():
+		init_mode = "one_hop"
+		GenWfc._propagate_one_hop(
+			seeds, domains, domain_counts, done, out, constraints, w, h, ctx
+		)
+		for i in n:
+			if done[i]:
+				continue
+			if domain_counts[i] == 0:
+				domains[i] = GenWfc._domain_copy(all_domain)
+				domain_counts[i] = count
+				repaired += 1
+		if repaired > 0:
+			init_mode = "one_hop_repaired"
 	ready = true
-
-
-func _restore_open_domains(
-	constraints: Dictionary,
-	domains: Array,
-	domain_counts: PackedInt32Array,
-	done: PackedByteArray,
-	out: PackedInt32Array,
-	ctx: Dictionary,
-) -> void:
-	var count: int = ctx.count
-	var all_domain: PackedByteArray = ctx.all_domain
-	var gid_to_idx: Dictionary = ctx.gid_to_idx
-
+	#region agent log
+	var avg_domain := 0.0
+	var open_cells := 0
+	var zero_domains := 0
 	for i in n:
-		match constraints.modes[i]:
-			GenConstraints.Mode.FORBID:
-				domains[i] = PackedByteArray()
-				domains[i].resize(count)
-				domain_counts[i] = 0
-				done[i] = 1
-				out[i] = 0
-			GenConstraints.Mode.FIXED:
-				var gid: int = constraints.fixed_gids[i]
-				var fixed_domain := PackedByteArray()
-				fixed_domain.resize(count)
-				fixed_domain[gid_to_idx[gid]] = 1
-				domains[i] = fixed_domain
-				domain_counts[i] = 1
-				done[i] = 1
-				out[i] = gid
-			_:
-				var seed_gid: int = _initial_seed[i] if i < _initial_seed.size() else 0
-				if seed_gid > 0 and gid_to_idx.has(seed_gid):
-					var seed_domain := PackedByteArray()
-					seed_domain.resize(count)
-					seed_domain[gid_to_idx[seed_gid]] = 1
-					domains[i] = seed_domain
-					domain_counts[i] = 1
-					done[i] = 1
-					out[i] = seed_gid
-				else:
-					domains[i] = GenWfc._domain_copy(all_domain)
-					domain_counts[i] = count
-					done[i] = 0
-					out[i] = 0
+		if done[i]:
+			continue
+		open_cells += 1
+		if domain_counts[i] == 0:
+			zero_domains += 1
+		avg_domain += float(domain_counts[i])
+	if open_cells > 0:
+		avg_domain /= float(open_cells)
+	GenDebugLog.write(
+		"H3",
+		"wfc_job.gd:_start_attempt",
+		"init_domains",
+		{
+			"attempt": attempt,
+			"tile_count": count,
+			"open_cells": open_cells,
+			"zero_domains": zero_domains,
+			"avg_domain": avg_domain,
+			"init_propagate": init_mode,
+			"seed_cells": seeds.size(),
+			"repaired": repaired,
+		},
+	)
+	#endregion

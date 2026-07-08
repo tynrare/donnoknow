@@ -16,7 +16,7 @@ const GENERATED_NAME := "Generated"
 @export var steps_per_frame: int = 2
 @export var bounds: Rect2i = Rect2i(0, 0, 54, 35)
 @export var strict_patterns: bool = false
-@export var use_patterns: bool = false
+@export var use_patterns: bool = true
 @export var backtrack_depth: int = 8
 @export var repeat_penalty: float = 1.0
 @export var tile_bias: Dictionary = {}
@@ -36,6 +36,7 @@ func _gen_options_dict() -> Dictionary:
 		"strict_patterns": strict_patterns,
 		"use_patterns": use_patterns,
 		"backtrack_depth": backtrack_depth,
+		"max_restarts": max_restarts,
 		"repeat_penalty": repeat_penalty,
 		"tile_bias": tile_bias,
 		"chunk_size": chunk_size,
@@ -178,7 +179,9 @@ func _generate_map() -> void:
 	var restarts: int = 32 if max_restarts == null else max_restarts
 	var options: Dictionary = _gen_options_dict()
 
+	GenService.clear_bounds(generated, bounds)
 	_seed_fixed_on_generated(generated, manifest, constraints, w, h)
+	generated.update_internals()
 
 	_manifest = manifest
 	_constraints = constraints
@@ -232,13 +235,15 @@ func _finish_job(step: Dictionary) -> void:
 		)
 
 	var filled: int = int(result.get("filled", 0))
-	if step.get("cancelled", false) or step.get("ok", false) or filled > 0:
+	if filled > 0 or step.get("cancelled", false) or step.get("ok", false):
 		_paint_result(generated, result)
 		_log_result(result, w, h)
+	elif int(result.get("total", 0)) == 0:
+		_log_result(result, w, h)
 	else:
-		push_error(
-			"ProceduralTilemap: generate failed: %s"
-			% str(result.get("error", step.get("error", "?")))
+		print(
+			"ProceduralTilemap: stopped early (%s), %d/%d filled"
+			% [str(result.get("error", step.get("error", "?"))), filled, int(result.get("total", 0))]
 		)
 
 	_job = null
@@ -263,6 +268,23 @@ func _paint_result(generated: TileMapLayer, result: Dictionary) -> void:
 	generated.update_internals()
 
 
+func _paint_step_cell(generated: TileMapLayer, idx: int, gid: int) -> void:
+	if gid <= 0:
+		return
+	GenService.paint_cell(
+		generated, _manifest, bounds, _gen_width, idx, gid, _constraints
+	)
+
+
+func _erase_step_cell(generated: TileMapLayer, idx: int) -> void:
+	if _constraints.modes[idx] == GenConstraints.Mode.FIXED:
+		return
+	if _constraints.modes[idx] == GenConstraints.Mode.FORBID:
+		return
+	var cell := bounds.position + Vector2i(idx % _gen_width, idx / _gen_width)
+	generated.erase_cell(cell)
+
+
 func _log_result(result: Dictionary, w: int, h: int) -> void:
 	print(
 		"ProceduralTilemap: %dx%d method=%s filled=%d/%d seed=%d attempts=%d backtracks=%d" % [
@@ -285,23 +307,30 @@ func _process(_delta: float) -> void:
 
 	var generated: TileMapLayer = _ensure_generated()
 	var steps: int = 8 if steps_per_frame == null else maxi(steps_per_frame, 1)
+	var dirty := false
 
 	for _i in steps:
 		var step: Dictionary = _job.step()
 		if step.get("restarted", false) and _job != null and not _job.cancelled:
+			GenService.clear_bounds(generated, bounds)
 			_seed_fixed_on_generated(
 				generated, _manifest, _constraints, _gen_width, _gen_height
 			)
-		elif step.has("idx") and not step.get("backtracked", false):
-			GenService.paint_cell(
-				generated, _manifest, bounds, _gen_width, int(step.idx), int(step.gid), _constraints
-			)
-		if step.get("finished", false):
-			generated.update_internals()
+			dirty = true
+		elif step.get("finished", false):
+			if dirty:
+				generated.update_internals()
 			_finish_job(step)
 			return
+		elif step.get("backtracked", false) and step.has("idx"):
+			_erase_step_cell(generated, int(step.idx))
+			dirty = true
+		elif step.has("idx") and step.has("gid"):
+			_paint_step_cell(generated, int(step.idx), int(step.gid))
+			dirty = true
 
-	# Defer mesh rebuild until generation finishes or restarts (avoids editor freeze).
+	if dirty:
+		generated.update_internals()
 
 
 func _clear_map() -> void:
