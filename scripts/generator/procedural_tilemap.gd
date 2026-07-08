@@ -285,6 +285,14 @@ func _analyze_rules() -> void:
 
 
 func _generate_map() -> void:
+	_start_wfc_job(false)
+
+
+func _patch_map() -> void:
+	_start_wfc_job(true)
+
+
+func _start_wfc_job(replace_inner: bool) -> void:
 	if _job != null:
 		push_warning("ProceduralTilemap: generation already running")
 		return
@@ -318,15 +326,21 @@ func _generate_map() -> void:
 		generated, manifest, grid_w, grid_h, grid_origin
 	)
 	var constraints: Dictionary = GenConstraints.from_paint_seed_and_halo(
-		grid_w, grid_h, halo, inner_w, inner_h, paint_gids, context_gids
+		grid_w,
+		grid_h,
+		halo,
+		inner_w,
+		inner_h,
+		paint_gids,
+		context_gids,
+		replace_inner,
 	)
 	var seed_count := 0
+	var mutate_count := 0
 	var context_count := 0
 	for y in grid_h:
 		for x in grid_w:
 			var i: int = y * grid_w + x
-			if i >= context_gids.size() or context_gids[i] <= 0:
-				continue
 			var in_inner: bool = (
 				halo <= 0
 				or (
@@ -336,10 +350,21 @@ func _generate_map() -> void:
 					and y < halo + inner_h
 				)
 			)
-			if in_inner and constraints.modes[i] != GenConstraints.Mode.FIXED:
-				seed_count += 1
-			elif not in_inner and constraints.modes[i] == GenConstraints.Mode.FIXED:
-				context_count += 1
+			if not in_inner:
+				if (
+					i < context_gids.size()
+					and context_gids[i] > 0
+					and constraints.modes[i] == GenConstraints.Mode.FIXED
+				):
+					context_count += 1
+				continue
+			if constraints.modes[i] == GenConstraints.Mode.FIXED:
+				continue
+			if i < context_gids.size() and context_gids[i] > 0:
+				if replace_inner:
+					mutate_count += 1
+				else:
+					seed_count += 1
 	var setup := GenService.validate_setup(manifest, rules, constraints)
 	for warn in setup.get("warnings", []):
 		print("ProceduralTilemap warn: %s" % warn)
@@ -369,12 +394,19 @@ func _generate_map() -> void:
 		return
 
 	set_process(true)
-	var mode := "continue" if seed_count > 0 else "new"
-	var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
-	print(
-		"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s)…"
-		% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note]
-	)
+	if replace_inner:
+		var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
+		print(
+			"ProceduralTilemap: patching %s (%d mutable, %d fixed%s)…"
+			% [bounds, mutate_count, _count_fixed(constraints), ctx_note]
+		)
+	else:
+		var mode := "continue" if seed_count > 0 else "new"
+		var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
+		print(
+			"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s)…"
+			% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note]
+		)
 
 
 func _count_fixed(constraints: Dictionary) -> int:
@@ -547,6 +579,12 @@ var _analyze_action: Callable:
 var _generate_action: Callable:
 	get:
 		return Callable(self, "_generate_map")
+
+
+@export_tool_button("Patch", "Callable")
+var _patch_action: Callable:
+	get:
+		return Callable(self, "_patch_map")
 
 
 @export_tool_button("Stop", "Callable")

@@ -33,6 +33,7 @@ static func from_paint_and_seed(
 	height: int,
 	paint_gids: PackedInt32Array,
 	seed_gids: PackedInt32Array,
+	replace_inner: bool = false,
 ) -> Dictionary:
 	var n: int = width * height
 	var modes: Array = _filled(n, Mode.GENERATE)
@@ -47,7 +48,7 @@ static func from_paint_and_seed(
 			modes[i] = Mode.FIXED
 			fixed[i] = paint_gids[i]
 			seeds[i] = 0
-		elif i < seed_gids.size() and seed_gids[i] > 0:
+		elif not replace_inner and i < seed_gids.size() and seed_gids[i] > 0:
 			seeds[i] = seed_gids[i]
 	return {
 		"width": width,
@@ -66,9 +67,10 @@ static func from_paint_seed_and_halo(
 	inner_h: int,
 	paint_gids: PackedInt32Array,
 	context_gids: PackedInt32Array,
+	replace_inner: bool = false,
 ) -> Dictionary:
 	if halo <= 0:
-		return from_paint_and_seed(grid_w, grid_h, paint_gids, context_gids)
+		return from_paint_and_seed(grid_w, grid_h, paint_gids, context_gids, replace_inner)
 
 	var n: int = grid_w * grid_h
 	var modes: Array = _filled(n, Mode.GENERATE)
@@ -104,10 +106,9 @@ static func from_paint_seed_and_halo(
 					modes[i] = Mode.FORBID
 				continue
 
-			if ctx_gid > 0:
+			modes[i] = Mode.GENERATE
+			if not replace_inner and ctx_gid > 0:
 				seeds[i] = ctx_gid
-			else:
-				modes[i] = Mode.GENERATE
 
 	return {
 		"width": grid_w,

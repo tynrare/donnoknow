@@ -253,4 +253,14 @@ func _test_halo_context_constraints(deadline: int) -> void:
 	var c0 := GenConstraints.from_paint_seed_and_halo(3, 3, 0, 3, 3, paint, context)
 	_assert(c0.has("seed_gids"), "halo=0 delegates to paint+seed")
 
+	var patch := GenConstraints.from_paint_seed_and_halo(
+		5, 5, 1, 3, 3, paint, context, true
+	)
+	_assert(patch.modes[inner_idx] == GenConstraints.Mode.GENERATE, "patch inner is GENERATE")
+	_assert(
+		patch.get("seed_gids", PackedInt32Array())[inner_idx] == 0,
+		"patch inner not seeded",
+	)
+	_assert(patch.modes[halo_idx] == GenConstraints.Mode.FIXED, "patch keeps halo FIXED")
+
 	print("PASS halo context constraints")
