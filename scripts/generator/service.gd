@@ -2,7 +2,6 @@
 extends RefCounted
 
 const GenWfc := preload("res://scripts/generator/wfc.gd")
-const GenStitch := preload("res://scripts/generator/stitch.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
 const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
@@ -15,12 +14,6 @@ const TILED_GID_MASK := 0x1FFFFFFF
 
 static func default_options() -> Dictionary:
 	return {
-		"gen_method": "wfc",
-		"use_patterns": true,
-		"backtrack_depth": 8,
-		"max_restarts": 8,
-		"tile_bias": {},
-		"chunk_size": 8,
 		"repeat_penalty": 1.0,
 	}
 
@@ -223,14 +216,11 @@ static func generate(
 	rules: Dictionary,
 	constraints: Dictionary,
 	seed: int = 0,
-	max_restarts: int = 32,
 	options: Dictionary = {},
 ) -> Dictionary:
 	var opts := default_options()
 	for key in options:
 		opts[key] = options[key]
-	if max_restarts == null:
-		max_restarts = 32
 
 	var err: String = validate_manifest(manifest)
 	if not err.is_empty():
@@ -240,11 +230,7 @@ static func generate(
 	if not err.is_empty():
 		return {"ok": false, "error": err}
 
-	var method: String = str(opts.get("gen_method", "wfc"))
-	if method == "chunk_stitch":
-		return GenStitch.generate(rules, constraints, seed, manifest, opts)
-
-	return GenWfc.generate(rules, constraints, seed, manifest, max_restarts, opts)
+	return GenWfc.generate(rules, constraints, seed, manifest, opts)
 
 
 static func create_job(
@@ -252,15 +238,12 @@ static func create_job(
 	rules: Dictionary,
 	constraints: Dictionary,
 	seed: int = 0,
-	max_restarts: int = 32,
 	options: Dictionary = {},
 ) -> GenWfcJob:
-	if max_restarts == null:
-		max_restarts = 32
 	var opts := default_options()
 	for key in options:
 		opts[key] = options[key]
-	return GenWfcJob.new(rules, constraints, manifest, seed, max_restarts, opts)
+	return GenWfcJob.new(rules, constraints, manifest, seed, opts)
 
 
 static func finalize_job(
@@ -274,20 +257,18 @@ static func finalize_job(
 	var step := {
 		"ok": not job.cancelled,
 		"gids": job.out,
-		"seed": job.base_seed + job.attempt - 1,
-		"attempts": job.attempt,
-		"backtracks": job.backtracks_used,
+		"seed": job.base_seed,
 		"method": "wfc_partial",
 		"cancelled": job.cancelled,
 	}
 	return GenWfc._finalize_result(step, rules, constraints, seed, manifest, options)
 
 
-static func analyze_manifest(manifest: Dictionary, chunk_size: int = 8) -> Dictionary:
+static func analyze_manifest(manifest: Dictionary) -> Dictionary:
 	var maps: Array = manifest.get("maps", [])
 	var analyze: Dictionary = manifest.get("analyze", {})
 	var min_adj: int = maxi(int(analyze.get("min_adj_count", 1)), 1)
-	return GenRules.analyze_maps(maps, min_adj, manifest, chunk_size)
+	return GenRules.analyze_maps(maps, min_adj, manifest)
 
 
 static func save_rules(manifest: Dictionary, rules: Dictionary) -> Error:

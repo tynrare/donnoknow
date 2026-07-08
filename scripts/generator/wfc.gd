@@ -4,7 +4,6 @@ extends RefCounted
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
 const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
-const GenDebugLog := preload("res://scripts/generator/debug_log.gd")
 
 const DELTA := [
 	Vector2i(0, -1),
@@ -27,20 +26,16 @@ static func generate(
 	constraints: Dictionary,
 	seed: int = 0,
 	manifest: Dictionary = {},
-	max_restarts: int = 16,
 	options: Dictionary = {},
 ) -> Dictionary:
-	if max_restarts == null:
-		max_restarts = 32
-
-	var job := GenWfcJob.new(rules, constraints, manifest, seed, max_restarts, options)
+	var job := GenWfcJob.new(rules, constraints, manifest, seed, options)
 	while not job.finished:
 		var step: Dictionary = job.step()
 		if step.get("finished", false):
 			return _finalize_result(step, rules, constraints, seed, manifest, options)
 
 	return _finalize_result(
-		{"ok": false, "gids": job.out, "attempts": max_restarts, "seed": seed},
+		{"ok": false, "gids": job.out, "seed": seed},
 		rules,
 		constraints,
 		seed,
@@ -73,8 +68,6 @@ static func _finalize_result(
 		"ok": filled.done > 0 or filled.done == filled.generatable or filled.generatable == 0,
 		"gids": gids,
 		"seed": int(step.get("seed", seed)),
-		"attempts": int(step.get("attempts", 1)),
-		"backtracks": int(step.get("backtracks", 0)),
 		"method": method,
 		"filled": filled.done,
 		"total": filled.generatable,
@@ -130,7 +123,6 @@ static func _sync_compat_row_dict(
 static func _build_context(
 	rules: Dictionary,
 	tiles: PackedInt32Array,
-	use_patterns: bool = false,
 ) -> Dictionary:
 	var count := tiles.size()
 	var gid_to_idx := {}
@@ -200,25 +192,10 @@ static func _build_context(
 				fallback_dir_slots += 1
 			_sync_compat_row_dict(compat, tiles, i, d, row)
 
-	#region agent log
-	GenDebugLog.write(
-		"H2",
-		"wfc.gd:_build_context",
-		"compat_built",
-		{
-			"tile_count": count,
-			"use_patterns": use_patterns,
-			"open_dir_slots": open_dir_slots,
-			"sym_dir_slots": sym_dir_slots,
-			"fallback_dir_slots": fallback_dir_slots,
-			"total_dir_slots": total_dir_slots,
-			"pattern_count": GenRules.patterns_3x3(rules).size() if use_patterns else 0,
-		},
-	)
-	#endregion
+	var build_ctx := {"count": count, "compat_dirs": compat_dirs}
+	_rebuild_propagator_fwd(build_ctx)
+	var propagator_fwd: Array = build_ctx["propagator_fwd"]
 
-	var patterns: Array = GenRules.patterns_3x3(rules) if use_patterns else []
-	var pattern_counts: Dictionary = rules.get("pattern_counts", {}) if use_patterns else {}
 	return {
 		"tiles": tiles,
 		"count": count,
@@ -226,10 +203,8 @@ static func _build_context(
 		"idx_to_gid": idx_to_gid,
 		"all_domain": all_domain,
 		"compat_dirs": compat_dirs,
+		"propagator_fwd": propagator_fwd,
 		"compat": compat,
-		"use_patterns": use_patterns,
-		"patterns": patterns,
-		"pattern_index": GenRules.build_pattern_index(patterns, pattern_counts) if use_patterns else {},
 	}
 
 
@@ -260,6 +235,28 @@ static func _augment_compat_from_constraints(constraints: Dictionary, ctx: Dicti
 			if neighbor_gid <= 0 or not gid_to_idx.has(neighbor_gid):
 				continue
 			_set_compat_pair(ctx, gi, gid_to_idx[neighbor_gid], d)
+
+	_rebuild_propagator_fwd(ctx)
+
+
+static func _rebuild_propagator_fwd(ctx: Dictionary) -> void:
+	var count: int = ctx.count
+	var compat_dirs: Array = ctx.compat_dirs
+	var propagator_fwd: Array = []
+	for d in 4:
+		var back_rows: Array = compat_dirs[OPPOSITE_DIR_IDX[d]]
+		var fwd_rows: Array = compat_dirs[d]
+		var dir_lists: Array = []
+		dir_lists.resize(count)
+		for u in count:
+			var targets := PackedInt32Array()
+			var fwd_row: PackedByteArray = fwd_rows[u]
+			for t in count:
+				if fwd_row[t] and back_rows[t][u]:
+					targets.append(t)
+			dir_lists[u] = targets
+		propagator_fwd.append(dir_lists)
+	ctx["propagator_fwd"] = propagator_fwd
 
 
 static func _pick_collapse_cell(
@@ -318,6 +315,39 @@ static func _touches_done(idx: int, done: PackedByteArray, w: int, h: int) -> bo
 		if done[np.y * w + np.x]:
 			return true
 	return false
+
+
+static func _touches_open(idx: int, done: PackedByteArray, w: int, h: int) -> bool:
+	var x := idx % w
+	var y := idx / w
+	for d in 4:
+		var np: Vector2i = Vector2i(x, y) + DELTA[d]
+		if np.x < 0 or np.y < 0 or np.x >= w or np.y >= h:
+			continue
+		if done[np.y * w + np.x] == 0:
+			return true
+	return false
+
+
+static func _collect_propagate_seeds(
+	constraints: Dictionary,
+	done: PackedByteArray,
+	out: PackedInt32Array,
+	w: int,
+	h: int,
+) -> Array:
+	var seeds: Array = []
+	for i in w * h:
+		if not done[i]:
+			continue
+		if constraints.modes[i] == GenConstraints.Mode.FIXED:
+			seeds.append(i)
+			continue
+		if out[i] <= 0:
+			continue
+		if _touches_open(i, done, w, h):
+			seeds.append(i)
+	return seeds
 
 
 static func _dist_to_fixed(idx: int, constraints: Dictionary, w: int, h: int) -> int:
@@ -512,7 +542,7 @@ static func _propagate(
 			var changed: int = _narrow(ni, idx, d, domains, domain_counts, done, out, w, h, ctx)
 			if changed < 0:
 				return false
-			if changed > 0 and not in_queue[ni]:
+			if changed > 0 and done[idx] and not in_queue[ni]:
 				queue.append(ni)
 				in_queue[ni] = 1
 
@@ -533,6 +563,7 @@ static func _narrow(
 ) -> int:
 	var count: int = ctx.count
 	var compat_dirs: Array = ctx.compat_dirs
+	var propagator_fwd: Array = ctx.get("propagator_fwd", [])
 	var gid_to_idx: Dictionary = ctx.gid_to_idx
 	var fwd: Array = compat_dirs[dir_idx]
 	var back: Array = compat_dirs[OPPOSITE_DIR_IDX[dir_idx]]
@@ -555,18 +586,29 @@ static func _narrow(
 			new_count += keep
 	else:
 		var src_domain: PackedByteArray = domains[src]
+		var dir_lists: Array = propagator_fwd[dir_idx] if propagator_fwd.size() > dir_idx else []
+		var allowed := PackedByteArray()
+		allowed.resize(count)
+		allowed.fill(0)
+		for u in count:
+			if not src_domain[u]:
+				continue
+			if dir_lists.size() > u:
+				var targets: PackedInt32Array = dir_lists[u]
+				for ti in targets.size():
+					allowed[targets[ti]] = 1
+			else:
+				var fwd_row: PackedByteArray = fwd[u]
+				var back_row: PackedByteArray = back[u]
+				for t in count:
+					if fwd_row[t] and back_row[t]:
+						allowed[t] = 1
 		for t in count:
 			if not dst_domain[t]:
 				continue
-			var keep := 0
-			for u in count:
-				if not src_domain[u]:
-					continue
-				if fwd[u][t] and back[t][u]:
-					keep = 1
-					break
-			if keep == 0:
-				dst_domain[t] = 0
+			var keep: int = 1 if allowed[t] else 0
+			if dst_domain[t] != keep:
+				dst_domain[t] = keep
 				changed = 1
 			new_count += keep
 
@@ -576,16 +618,6 @@ static func _narrow(
 		domain_counts[dst] = 0
 		return -1
 	domain_counts[dst] = new_count
-
-	if not done[dst] and ctx.get("use_patterns", false):
-		if not _apply_pattern_filter(
-			dst_domain, domain_counts, dst, out, done, w, h, ctx
-		):
-			domain_counts[dst] = 0
-			return -1
-		if domain_counts[dst] == 0:
-			return -1
-
 	return 1
 
 
@@ -599,7 +631,6 @@ static func _weighted_pick_idx(
 	idx: int,
 	w: int,
 	h: int,
-	tile_bias: Dictionary = {},
 	exclude: Array = [],
 	repeat_penalty: float = 1.0,
 ) -> int:
@@ -618,17 +649,11 @@ static func _weighted_pick_idx(
 		else:
 			return options[0]
 
-	var ctx_arr: PackedInt32Array = GenRules.build_context_at(out, done, idx, w, h)
 	var total := 0.0
 	var weights: Array = []
 	for option_idx in filtered:
 		var gid: int = idx_to_gid[option_idx]
-		var ctx_w: float = GenRules.context_weight(rules, gid, ctx_arr)
-		var weight: float
-		if ctx_w > 0.0:
-			weight = ctx_w * 8.0 + GenRules.pick_weight(rules, gid, tile_bias) * 0.25
-		else:
-			weight = GenRules.pick_weight(rules, gid, tile_bias)
+		var weight: float = GenRules.pick_weight(rules, gid)
 		weight *= _repeat_penalty_factor(rules, out, done, idx, w, h, gid, repeat_penalty)
 		weights.append(weight)
 		total += weight

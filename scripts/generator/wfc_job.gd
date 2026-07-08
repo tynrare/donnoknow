@@ -1,10 +1,9 @@
-# agent: composer-2.5 | 2026-07-07 | seed resume propagate | e2f3a4
+# agent: composer-2.5 | 2026-07-08 | slim job skip-cell only | s4t5u6
 extends RefCounted
 
 const GenWfc := preload("res://scripts/generator/wfc.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
-const GenDebugLog := preload("res://scripts/generator/debug_log.gd")
 
 var cancelled := false
 var finished := false
@@ -24,16 +23,10 @@ var w: int = 0
 var h: int = 0
 var n: int = 0
 var base_seed: int = 0
-var attempt: int = 0
-var max_restarts: int = 32
 var ready := false
 
 var collapse_stack: Array = []
 var tried_picks: Dictionary = {}
-var backtrack_depth: int = 8
-var backtracks_used: int = 0
-var use_patterns: bool = false
-var tile_bias: Dictionary = {}
 var repeat_penalty: float = 1.0
 var _initial_seed: PackedInt32Array = PackedInt32Array()
 var _retry_cell: int = -1
@@ -45,21 +38,13 @@ func _init(
 	p_constraints: Dictionary,
 	p_manifest: Dictionary,
 	p_seed: int = 0,
-	p_max_restarts: int = 32,
 	p_options: Dictionary = {},
 ) -> void:
 	rules = p_rules
 	constraints = p_constraints
 	base_seed = p_seed
-	max_restarts = p_max_restarts if p_max_restarts != null else 32
 	options = p_options
-	backtrack_depth = int(options.get("backtrack_depth", 8))
-	use_patterns = bool(options.get("use_patterns", false))
-	tile_bias = options.get("tile_bias", {})
 	repeat_penalty = clampf(float(options.get("repeat_penalty", 1.0)), 0.0, 1.0)
-	var opt_restarts: Variant = options.get("max_restarts", null)
-	if opt_restarts != null:
-		max_restarts = int(opt_restarts)
 
 	var tiles := GenRules.generatable_tiles(rules, p_manifest)
 	tiles = GenWfc._merge_fixed_tiles(tiles, constraints)
@@ -67,13 +52,12 @@ func _init(
 		finished = true
 		return
 
-	ctx = GenWfc._build_context(rules, tiles, use_patterns)
+	ctx = GenWfc._build_context(rules, tiles)
 	GenWfc._augment_compat_from_constraints(constraints, ctx)
 	w = constraints.width
 	h = constraints.height
 	n = w * h
 	_initial_seed = _read_seed_gids(constraints)
-	attempt = 0
 	_start_attempt()
 
 
@@ -113,11 +97,6 @@ func step() -> Dictionary:
 	if best < 0:
 		return _finish_now(true, false)
 
-	if not GenWfc._apply_pattern_filter(
-		domains[best], domain_counts, best, out, done, w, h, ctx
-	):
-		return _skip_cell(best)
-
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var exclude: Array = tried_picks.get(best, [])
@@ -134,7 +113,6 @@ func step() -> Dictionary:
 		best,
 		w,
 		h,
-		tile_bias,
 		exclude,
 		repeat_penalty,
 	)
@@ -163,22 +141,6 @@ func step() -> Dictionary:
 		_apply_exhausted_cells(count)
 		var tried: Array = tried_picks.get(best, [])
 		var remaining: int = GenWfc.untried_domain_count(prev_domain, tried)
-		#region agent log
-		if remaining <= 0 or attempt <= 2:
-			GenDebugLog.write(
-				"H5",
-				"wfc_job.gd:step",
-				"propagate_fail",
-				{
-					"attempt": attempt,
-					"cell": best,
-					"picked_gid": idx_to_gid[picked_idx],
-					"domain_size": prev_count,
-					"tried": tried.size(),
-					"remaining": remaining,
-				},
-			)
-		#endregion
 		if remaining > 0:
 			_retry_cell = best
 			return {"finished": false, "retry": true, "idx": best}
@@ -240,31 +202,12 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 	if filled.done < filled.generatable:
 		method = "wfc_partial"
 	var success: bool = (not was_cancelled) and (ok or int(filled.done) > 0)
-	#region agent log
-	GenDebugLog.write(
-		"H4",
-		"wfc_job.gd:_finish_now",
-		"job_finished",
-		{
-			"ok_param": ok,
-			"success": success,
-			"filled": filled.done,
-			"total": filled.generatable,
-			"attempts": attempt,
-			"backtracks": backtracks_used,
-			"method": method,
-			"reason": reason,
-		},
-	)
-	#endregion
 	return {
 		"finished": true,
 		"ok": success,
 		"cancelled": was_cancelled,
 		"gids": gids,
-		"seed": base_seed + attempt - 1,
-		"attempts": attempt,
-		"backtracks": backtracks_used,
+		"seed": base_seed,
 		"method": method,
 		"filled": filled.done,
 		"total": filled.generatable,
@@ -273,12 +216,10 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 
 
 func _start_attempt() -> void:
-	attempt += 1
 	rng = RandomNumberGenerator.new()
-	rng.seed = base_seed + attempt - 1
+	rng.seed = base_seed
 	collapse_stack.clear()
 	tried_picks.clear()
-	backtracks_used = 0
 	_retry_cell = -1
 	_exhausted_cells.clear()
 
@@ -331,52 +272,15 @@ func _start_attempt() -> void:
 					domain_counts[i] = count
 					done[i] = 0
 
-	var seeds: Array = []
-	for i in n:
-		if done[i] and out[i] > 0:
-			seeds.append(i)
-	var init_mode := "none"
-	var repaired := 0
+	var seeds: Array = GenWfc._collect_propagate_seeds(constraints, done, out, w, h)
 	if not seeds.is_empty():
-		init_mode = "propagate"
-		if not GenWfc._propagate(
+		GenWfc._propagate_one_hop(
 			seeds, domains, domain_counts, done, out, constraints, w, h, ctx
-		):
-			init_mode = "propagate_repaired"
+		)
 		for i in n:
 			if done[i]:
 				continue
 			if domain_counts[i] == 0:
 				domains[i] = GenWfc._domain_copy(all_domain)
 				domain_counts[i] = count
-				repaired += 1
 	ready = true
-	#region agent log
-	var avg_domain := 0.0
-	var open_cells := 0
-	var zero_domains := 0
-	for i in n:
-		if done[i]:
-			continue
-		open_cells += 1
-		if domain_counts[i] == 0:
-			zero_domains += 1
-		avg_domain += float(domain_counts[i])
-	if open_cells > 0:
-		avg_domain /= float(open_cells)
-	GenDebugLog.write(
-		"H3",
-		"wfc_job.gd:_start_attempt",
-		"init_domains",
-		{
-			"attempt": attempt,
-			"tile_count": count,
-			"open_cells": open_cells,
-			"zero_domains": zero_domains,
-			"avg_domain": avg_domain,
-			"init_propagate": init_mode,
-			"seed_cells": seeds.size(),
-			"repaired": repaired,
-		},
-	)
-	#endregion

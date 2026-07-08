@@ -1,4 +1,4 @@
-# agent: composer-2.5 | 2026-07-07 | repeat_penalty option | h3i4j5
+# agent: composer-2.5 | 2026-07-08 | async gen throttled tile flush | p1q2r3
 @tool
 extends TileMapLayer
 
@@ -9,18 +9,20 @@ const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
 
 const GENERATED_NAME := "Generated"
 
+enum GenPhase { IDLE, PREP, JOB_INIT, RUNNING }
+
 @export var manifest_path: String = "res://assets/tiles/adve/manifest.json"
 @export var rules_path: String = "res://resources/generator/adve.rules.json"
 @export var map_seed: int = 0
 @export var max_restarts: int = 8
-@export var steps_per_frame: int = 2
+@export var steps_per_frame: int = 4
 @export var bounds: Rect2i = Rect2i(0, 0, 54, 35)
 @export var context_halo: int = 1
-@export var use_patterns: bool = true
 @export var backtrack_depth: int = 8
 @export var repeat_penalty: float = 1.0
 @export var tile_bias: Dictionary = {}
 @export var chunk_size: int = 8
+@export var update_interval_ms: int = 120
 
 const BOUNDS_HANDLE_RADIUS := 2.0
 
@@ -33,6 +35,18 @@ var _gen_height: int = 0
 var _gen_halo: int = 0
 var _gen_origin: Vector2i = Vector2i.ZERO
 var _gen_options: Dictionary = {}
+var _gen_restarts: int = 32
+var _gen_phase: int = GenPhase.IDLE
+var _replace_inner: bool = false
+var _pending_flush: bool = false
+var _flush_scheduled: bool = false
+var _last_flush_ms: int = 0
+
+
+func _ready() -> void:
+	if Engine.is_editor_hint():
+		process_mode = Node.PROCESS_MODE_ALWAYS
+		set_process(false)
 
 
 func get_bounds_local_rect() -> Rect2:
@@ -109,7 +123,7 @@ func _is_selected_in_editor() -> bool:
 
 func _gen_options_dict() -> Dictionary:
 	return {
-		"use_patterns": use_patterns,
+		"use_patterns": false,
 		"backtrack_depth": backtrack_depth,
 		"max_restarts": max_restarts,
 		"repeat_penalty": repeat_penalty,
@@ -144,7 +158,7 @@ func _generation_size(_manifest: Dictionary) -> Vector2i:
 	return map_size
 
 
-func _seed_fixed_on_generated(
+func _sync_fixed_paint_to_generated(
 	generated: TileMapLayer,
 	manifest: Dictionary,
 	constraints: Dictionary,
@@ -156,54 +170,17 @@ func _seed_fixed_on_generated(
 	for y in height:
 		for x in width:
 			var i: int = y * width + x
-			if not _is_interior_idx(i):
-				continue
 			if constraints.modes[i] != GenConstraints.Mode.FIXED:
 				continue
 			var gid: int = constraints.fixed_gids[i]
 			var atlas: Vector2i = GenService.gid_to_atlas(manifest, gid)
 			if atlas.x < 0:
 				continue
-			generated.set_cell(
-				paint_rect.position + Vector2i(x, y), source_id, atlas
-			)
-
-
-func _sync_generated_from_constraints(
-	generated: TileMapLayer,
-	manifest: Dictionary,
-	constraints: Dictionary,
-	width: int,
-	height: int,
-) -> void:
-	_seed_fixed_on_generated(generated, manifest, constraints, width, height)
-	var paint_rect := _gen_paint_rect()
-	var seeds: PackedInt32Array = constraints.get("seed_gids", PackedInt32Array())
-	for y in height:
-		for x in width:
-			var i: int = y * width + x
-			if not _is_interior_idx(i):
+			var cell := paint_rect.position + Vector2i(x, y)
+			if generated.get_cell_atlas_coords(cell) == atlas:
 				continue
-			if constraints.modes[i] == GenConstraints.Mode.FIXED:
-				continue
-			if constraints.modes[i] == GenConstraints.Mode.FORBID:
-				continue
-			if i >= seeds.size() or seeds[i] <= 0:
-				continue
-			GenService.paint_cell(
-				generated, manifest, paint_rect, width, i, seeds[i], constraints
-			)
-
-
-func _reset_generated_for_attempt(
-	generated: TileMapLayer,
-	manifest: Dictionary,
-	constraints: Dictionary,
-	width: int,
-	height: int,
-) -> void:
-	GenService.clear_bounds(generated, bounds)
-	_sync_generated_from_constraints(generated, manifest, constraints, width, height)
+			generated.set_cell(cell, source_id, atlas)
+			_pending_flush = true
 
 
 func _ensure_generated() -> TileMapLayer:
@@ -293,25 +270,41 @@ func _patch_map() -> void:
 
 
 func _start_wfc_job(replace_inner: bool) -> void:
-	if _job != null:
+	if _gen_phase != GenPhase.IDLE or _job != null:
 		push_warning("ProceduralTilemap: generation already running")
 		return
+	if not FileAccess.file_exists(manifest_path):
+		push_error("ProceduralTilemap: missing manifest %s" % manifest_path)
+		return
+	if not FileAccess.file_exists(rules_path):
+		push_error("ProceduralTilemap: missing rules %s (use Analyze Rules first)" % rules_path)
+		return
+	if bounds.size.x <= 0 or bounds.size.y <= 0:
+		push_error("ProceduralTilemap: invalid generation bounds %s" % bounds)
+		return
 
+	_replace_inner = replace_inner
+	_gen_phase = GenPhase.PREP
+	set_process(true)
+	print("ProceduralTilemap: preparing %s…" % bounds)
+
+
+func _prep_generation() -> bool:
 	var manifest: Dictionary = GenService.load_manifest(manifest_path)
 	if manifest.is_empty():
 		push_error("ProceduralTilemap: missing manifest %s" % manifest_path)
-		return
+		return false
 	var rules: Dictionary = GenRules.load(rules_path)
-	if rules.is_empty():
+	if rules.is_empty() or not rules.has("adjacency"):
 		push_error("ProceduralTilemap: missing rules %s (use Analyze Rules first)" % rules_path)
-		return
+		return false
 
 	var size: Vector2i = _generation_size(manifest)
 	var inner_w: int = size.x
 	var inner_h: int = size.y
 	if inner_w <= 0 or inner_h <= 0:
 		push_error("ProceduralTilemap: invalid generation bounds %s" % bounds)
-		return
+		return false
 
 	var halo: int = maxi(context_halo, 0)
 	var grid_w: int = inner_w + halo * 2
@@ -333,8 +326,9 @@ func _start_wfc_job(replace_inner: bool) -> void:
 		inner_h,
 		paint_gids,
 		context_gids,
-		replace_inner,
+		_replace_inner,
 	)
+
 	var seed_count := 0
 	var mutate_count := 0
 	var context_count := 0
@@ -361,19 +355,10 @@ func _start_wfc_job(replace_inner: bool) -> void:
 			if constraints.modes[i] == GenConstraints.Mode.FIXED:
 				continue
 			if i < context_gids.size() and context_gids[i] > 0:
-				if replace_inner:
+				if _replace_inner:
 					mutate_count += 1
 				else:
 					seed_count += 1
-	var setup := GenService.validate_setup(manifest, rules, constraints)
-	for warn in setup.get("warnings", []):
-		print("ProceduralTilemap warn: %s" % warn)
-	if not setup.get("ok", false):
-		push_error("ProceduralTilemap: %s" % GenService.format_report(setup))
-		return
-
-	var restarts: int = 32 if max_restarts == null else max_restarts
-	var options: Dictionary = _gen_options_dict()
 
 	_manifest = manifest
 	_constraints = constraints
@@ -382,31 +367,25 @@ func _start_wfc_job(replace_inner: bool) -> void:
 	_gen_height = grid_h
 	_gen_halo = halo
 	_gen_origin = grid_origin
-	_gen_options = options
+	_gen_options = _gen_options_dict()
+	_gen_restarts = 32 if max_restarts == null else max_restarts
 
-	_sync_generated_from_constraints(generated, manifest, constraints, grid_w, grid_h)
-	generated.update_internals()
+	_sync_fixed_paint_to_generated(generated, manifest, constraints, grid_w, grid_h)
+	_flush_generated(false)
 
-	_job = GenService.create_job(manifest, rules, constraints, map_seed, restarts, options)
-	if _job.finished:
-		push_error("ProceduralTilemap: failed to start job")
-		_job = null
-		return
-
-	set_process(true)
-	if replace_inner:
-		var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
+	var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
+	if _replace_inner:
 		print(
 			"ProceduralTilemap: patching %s (%d mutable, %d fixed%s)…"
 			% [bounds, mutate_count, _count_fixed(constraints), ctx_note]
 		)
 	else:
 		var mode := "continue" if seed_count > 0 else "new"
-		var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
 		print(
 			"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s)…"
 			% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note]
 		)
+	return true
 
 
 func _count_fixed(constraints: Dictionary) -> int:
@@ -417,13 +396,33 @@ func _count_fixed(constraints: Dictionary) -> int:
 	return n
 
 
+func _reset_generation_state() -> void:
+	_job = null
+	_manifest = {}
+	_constraints = {}
+	_rules = {}
+	_gen_width = 0
+	_gen_height = 0
+	_gen_halo = 0
+	_gen_origin = Vector2i.ZERO
+	_gen_options = {}
+	_gen_restarts = 32
+	_gen_phase = GenPhase.IDLE
+	_replace_inner = false
+	_pending_flush = false
+	_flush_scheduled = false
+	set_process(false)
+
+
 func _stop_generation() -> void:
+	if _gen_phase == GenPhase.PREP or _gen_phase == GenPhase.JOB_INIT:
+		_reset_generation_state()
+		print("ProceduralTilemap: stopped before job started")
+		return
 	if _job == null:
 		return
 	_job.cancel()
-	var generated := get_node_or_null(GENERATED_NAME) as TileMapLayer
-	if generated != null:
-		generated.update_internals()
+	_flush_generated(true)
 	_finish_job({"finished": true, "cancelled": true})
 	print("ProceduralTilemap: stopped (partial kept)")
 
@@ -451,16 +450,7 @@ func _finish_job(step: Dictionary) -> void:
 			% [str(result.get("error", step.get("error", "?"))), filled, int(result.get("total", 0))]
 		)
 
-	_job = null
-	_manifest = {}
-	_constraints = {}
-	_rules = {}
-	_gen_width = 0
-	_gen_height = 0
-	_gen_halo = 0
-	_gen_origin = Vector2i.ZERO
-	_gen_options = {}
-	set_process(false)
+	_reset_generation_state()
 
 
 func _paint_result(generated: TileMapLayer, result: Dictionary) -> void:
@@ -478,7 +468,8 @@ func _paint_result(generated: TileMapLayer, result: Dictionary) -> void:
 		GenService.paint_cell(
 			generated, _manifest, paint_rect, _gen_width, i, gids[i], _constraints
 		)
-	generated.update_internals()
+		_pending_flush = true
+	_flush_generated(true)
 
 
 func _paint_step_cell(generated: TileMapLayer, idx: int, gid: int) -> void:
@@ -489,17 +480,34 @@ func _paint_step_cell(generated: TileMapLayer, idx: int, gid: int) -> void:
 	GenService.paint_cell(
 		generated, _manifest, _gen_paint_rect(), _gen_width, idx, gid, _constraints
 	)
+	_pending_flush = true
 
 
-func _erase_step_cell(generated: TileMapLayer, idx: int) -> void:
-	if not _is_interior_idx(idx):
+func _flush_generated(force: bool) -> void:
+	if not _pending_flush:
 		return
-	if _constraints.modes[idx] == GenConstraints.Mode.FIXED:
+	var interval: int = 120 if update_interval_ms == null else maxi(update_interval_ms, 16)
+	var now := Time.get_ticks_msec()
+	if not force and now - _last_flush_ms < interval:
 		return
-	if _constraints.modes[idx] == GenConstraints.Mode.FORBID:
+	if force:
+		_apply_generated_flush()
 		return
-	var cell := _gen_origin + Vector2i(idx % _gen_width, idx / _gen_width)
-	generated.erase_cell(cell)
+	if _flush_scheduled:
+		return
+	_flush_scheduled = true
+	call_deferred("_apply_generated_flush")
+
+
+func _apply_generated_flush() -> void:
+	_flush_scheduled = false
+	if not _pending_flush:
+		return
+	var generated := get_node_or_null(GENERATED_NAME) as TileMapLayer
+	if generated != null:
+		generated.update_internals()
+	_pending_flush = false
+	_last_flush_ms = Time.get_ticks_msec()
 
 
 func _log_result(result: Dictionary, w: int, h: int) -> void:
@@ -518,27 +526,58 @@ func _log_result(result: Dictionary, w: int, h: int) -> void:
 
 
 func _process(_delta: float) -> void:
+	match _gen_phase:
+		GenPhase.PREP:
+			if not _prep_generation():
+				_reset_generation_state()
+				return
+			_gen_phase = GenPhase.JOB_INIT
+			return
+		GenPhase.JOB_INIT:
+			_spawn_job()
+			return
+		GenPhase.RUNNING:
+			_run_wfc_steps()
+		_:
+			set_process(false)
+
+
+func _spawn_job() -> void:
+	var t0 := Time.get_ticks_msec()
+	_job = GenService.create_job(
+		_manifest, _rules, _constraints, map_seed, _gen_restarts, _gen_options
+	)
+	var ms := Time.get_ticks_msec() - t0
+	print("ProceduralTilemap: job init %d ms" % ms)
+	if _job.finished or not _job.ready:
+		push_error("ProceduralTilemap: failed to start job")
+		_reset_generation_state()
+		return
+	_gen_phase = GenPhase.RUNNING
+
+
+func _run_wfc_steps() -> void:
 	if _job == null:
-		set_process(false)
+		_reset_generation_state()
 		return
 
 	var generated: TileMapLayer = _ensure_generated()
-	var steps: int = 8 if steps_per_frame == null else maxi(steps_per_frame, 1)
-	var dirty := false
+	var steps: int = 4 if steps_per_frame == null else maxi(steps_per_frame, 1)
+	var painted := false
 
 	for _i in steps:
 		var step: Dictionary = _job.step()
 		if step.get("finished", false):
-			if dirty:
-				generated.update_internals()
+			if painted:
+				_flush_generated(true)
 			_finish_job(step)
 			return
-		elif step.has("idx") and step.has("gid"):
+		if step.has("idx") and step.has("gid"):
 			_paint_step_cell(generated, int(step.idx), int(step.gid))
-			dirty = true
+			painted = true
 
-	if dirty:
-		generated.update_internals()
+	if painted:
+		_flush_generated(false)
 
 
 func _clear_map() -> void:
@@ -547,7 +586,7 @@ func _clear_map() -> void:
 	if generated == null:
 		return
 	GenService.clear_bounds(generated, bounds)
-	generated.update_internals()
+	generated.call_deferred("update_internals")
 	queue_bounds_redraw()
 	print("ProceduralTilemap: cleared Generated in %s" % bounds)
 
@@ -558,7 +597,7 @@ func _clear_all_map() -> void:
 	if generated == null:
 		return
 	generated.clear()
-	generated.update_internals()
+	generated.call_deferred("update_internals")
 	queue_bounds_redraw()
 	print("ProceduralTilemap: cleared all Generated tiles")
 

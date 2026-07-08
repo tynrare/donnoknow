@@ -7,7 +7,8 @@ const GenAtlasAnalyze := preload("res://scripts/generator/atlas_analyze.gd")
 const DIRS := GenTmx.DIRS
 const CTX_UNK := 0
 const DEFAULT_CHUNK_SIZE := 8
-const DEFAULT_EDGE_GAP_MAX := 8
+const DEFAULT_EDGE_GAP_MAX := 4
+const DEFAULT_MAX_ADJ_MATES := 16
 const TILED_GID_MASK := 0x1FFFFFFF
 const OPPOSITE := {
 	"north": "south",
@@ -24,10 +25,7 @@ static func analyze_maps(
 	chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Dictionary:
 	var tile_counts: Dictionary = {}
-	var adjacency: Dictionary = {}
-	var context_weights: Dictionary = {}
-	var patterns_3x3: Array = []
-	var pattern_counts: Dictionary = {}
+	var map_adjacency: Dictionary = {}
 	var chunks: Array = []
 	var chunk_set := {}
 	var chunk_counts: Dictionary = {}
@@ -37,15 +35,21 @@ static func analyze_maps(
 	var use_maps: bool = analyze.get("maps", true)
 	var use_chunks: bool = analyze.get("chunks", false)
 	var use_tileset_edges: bool = analyze.get("tileset_edges", false)
+	var use_patterns: bool = bool(analyze.get("patterns_3x3", false))
+	var use_context: bool = bool(analyze.get("context_weights", false))
 	var edge_weight_raw: float = float(analyze.get("tileset_edges_weight", 0.35))
 	var edge_weight: int = maxi(int(round(edge_weight_raw * 10.0)), 1) if edge_weight_raw > 0.0 else 0
 	var min_adj: int = maxi(int(analyze.get("min_adj_count", min_adj_count)), 1)
+	var max_adj_mates: int = maxi(int(analyze.get("max_adj_mates", DEFAULT_MAX_ADJ_MATES)), 1)
 	var tile_classes: Array = []
 	var topology: Dictionary = {}
 	var sources := {
 		"maps": use_maps,
 		"tileset_edges": use_tileset_edges,
 		"min_adj_count": min_adj,
+		"max_adj_mates": max_adj_mates,
+		"patterns_3x3": use_patterns,
+		"context_weights": use_context,
 		"color_quantize": int(analyze.get("color_quantize", 24)),
 		"edge_quantize": int(analyze.get("edge_quantize", 32)),
 		"edge_match": str(analyze.get("edge_match", "exact")),
@@ -61,32 +65,44 @@ static func analyze_maps(
 			var map := GenTmx.read_map(map_path)
 			if map.is_empty():
 				continue
-			_scan_map(map, tile_counts, adjacency, manifest)
-			_scan_context(map, context_weights, manifest)
-			_scan_patterns_3x3(map, patterns_3x3, pattern_counts, manifest)
+			_scan_map(map, tile_counts, map_adjacency, manifest)
 			if use_chunks:
 				_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
 			total += map.width * map.height
 
-	_filter_adjacency(adjacency, min_adj)
-	_symmetrize_adjacency(adjacency)
-
+	var adjacency: Dictionary = {}
+	var active: Dictionary = _active_gid_set(tile_counts, tile_classes)
 	if use_tileset_edges and edge_weight > 0:
-		var active: Dictionary = _active_gid_set(tile_counts, tile_classes)
 		var edge_adj: Dictionary = _restrict_adjacency(
 			atlas_result.get("adjacency", {}), active
 		)
+		adjacency = {}
+		_merge_adjacency(adjacency, edge_adj, edge_weight)
+		if use_maps:
+			_merge_adjacency(adjacency, map_adjacency, 1)
+	else:
+		adjacency = map_adjacency
+
+	_filter_adjacency(adjacency, min_adj)
+	_symmetrize_adjacency(adjacency)
+	_cap_adjacency(adjacency, max_adj_mates)
+	_symmetrize_adjacency(adjacency)
+
+	if use_tileset_edges and edge_weight > 0:
 		var edge_gap_max: int = maxi(
 			int(analyze.get("edge_gap_max_neighbors", DEFAULT_EDGE_GAP_MAX)), 1
 		)
-		_merge_edge_gap_fill(adjacency, edge_adj, edge_weight, active, edge_gap_max)
+		var edge_adj_gap: Dictionary = _restrict_adjacency(
+			atlas_result.get("adjacency", {}), active
+		)
+		_merge_edge_gap_fill(adjacency, edge_adj_gap, edge_weight, active, edge_gap_max)
+		_symmetrize_adjacency(adjacency)
+		_cap_adjacency(adjacency, max_adj_mates)
 		_symmetrize_adjacency(adjacency)
 
 	if analyze.get("trim_self_adj", true):
 		var bg_gid: int = int(manifest.get("background_gid", 1))
 		_trim_self_adjacency(adjacency, bg_gid)
-
-	_normalize_context_weights(context_weights, 3)
 
 	var tile_weights := {}
 	var pick_weights := {}
@@ -101,14 +117,11 @@ static func analyze_maps(
 		pick_weights[str(gid)] = log(float(tile_counts[gid]) + 1.0) / maxf(log_total, 0.001)
 
 	return {
-		"version": 3,
+		"version": 4,
 		"tile_weights": tile_weights,
 		"pick_weights": pick_weights,
 		"pick_weight_mode": "log",
 		"adjacency": adjacency,
-		"context_weights": context_weights,
-		"patterns_3x3": patterns_3x3,
-		"pattern_counts": pattern_counts,
 		"chunks": chunks,
 		"chunk_counts": chunk_counts,
 		"chunk_compat": chunk_compat,
@@ -127,11 +140,10 @@ static func analyze_maps(
 		"stats": {
 			"cells": total,
 			"unique_tiles": tile_counts.size(),
-			"patterns_3x3": patterns_3x3.size(),
-			"context_keys": context_weights.size(),
 			"chunks": chunks.size(),
 			"tile_classes": tile_classes.size(),
 			"alias_max_class_size": int(analyze.get("alias_max_class_size", 4)),
+			"max_adj_mates": max_adj_mates,
 		},
 	}
 
@@ -141,7 +153,7 @@ static func save(path: String, rules: Dictionary) -> Error:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		return FileAccess.get_open_error()
-	f.store_string(JSON.stringify(rules, "\t"))
+	f.store_string(JSON.stringify(rules))
 	return OK
 
 
@@ -686,6 +698,25 @@ static func _filter_adjacency(adjacency: Dictionary, min_count: int) -> void:
 			for other in bucket.keys():
 				if bucket[other] < min_count:
 					bucket.erase(other)
+
+
+static func _cap_adjacency(adjacency: Dictionary, max_mates: int) -> void:
+	if max_mates <= 0:
+		return
+	for gid_key in adjacency:
+		for d in DIRS:
+			var bucket: Dictionary = adjacency[gid_key][d]
+			if bucket.size() <= max_mates:
+				continue
+			var ranked: Array = []
+			for nb_key in bucket:
+				ranked.append({"key": nb_key, "count": int(bucket[nb_key])})
+			ranked.sort_custom(func(a, b): return a.count > b.count)
+			var kept: Dictionary = {}
+			for i in mini(max_mates, ranked.size()):
+				var entry: Dictionary = ranked[i]
+				kept[str(entry.key)] = int(entry.count)
+			adjacency[gid_key][d] = kept
 
 
 static func _symmetrize_adjacency(adjacency: Dictionary) -> void:
