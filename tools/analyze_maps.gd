@@ -23,11 +23,12 @@ func _init() -> void:
 	var grid: Dictionary = rules.get("grid", {})
 	var sources: Dictionary = rules.get("sources", {})
 	print(
-		"Saved %s | cells=%d unique_tiles=%d classes=%d grid=%dx%d map=%dx%d max_adj=%d sources=%s v=%d" % [
+		"Saved %s | cells=%d unique_tiles=%d sigs=%d gen_sigs=%d grid=%dx%d map=%dx%d max_adj=%d sources=%s v=%d" % [
 			manifest.rules,
 			stats.get("cells", 0),
 			stats.get("unique_tiles", 0),
-			stats.get("tile_classes", 0),
+			stats.get("unique_signatures", 0),
+			stats.get("generatable_signatures", 0),
 			grid.get("columns", 0),
 			grid.get("rows", 0),
 			grid.get("map_width", 0),

@@ -43,10 +43,14 @@ static func from_paint_and_seed(
 	var seeds := PackedInt32Array()
 	seeds.resize(n)
 	seeds.fill(0)
+	var paint_anchor := PackedByteArray()
+	paint_anchor.resize(n)
+	paint_anchor.fill(0)
 	for i in mini(n, paint_gids.size()):
 		if paint_gids[i] > 0:
 			modes[i] = Mode.FIXED
 			fixed[i] = paint_gids[i]
+			paint_anchor[i] = 1
 			seeds[i] = 0
 		elif not replace_inner and i < seed_gids.size() and seed_gids[i] > 0:
 			seeds[i] = seed_gids[i]
@@ -56,6 +60,7 @@ static func from_paint_and_seed(
 		"modes": modes,
 		"fixed_gids": fixed,
 		"seed_gids": seeds,
+		"paint_anchor": paint_anchor,
 	}
 
 
@@ -80,6 +85,9 @@ static func from_paint_seed_and_halo(
 	var seeds := PackedInt32Array()
 	seeds.resize(n)
 	seeds.fill(0)
+	var paint_anchor := PackedByteArray()
+	paint_anchor.resize(n)
+	paint_anchor.fill(0)
 
 	for y in grid_h:
 		for x in grid_w:
@@ -96,6 +104,7 @@ static func from_paint_seed_and_halo(
 			if paint_gid > 0:
 				modes[i] = Mode.FIXED
 				fixed[i] = paint_gid
+				paint_anchor[i] = 1
 				continue
 
 			if not in_inner:
@@ -116,6 +125,7 @@ static func from_paint_seed_and_halo(
 		"modes": modes,
 		"fixed_gids": fixed,
 		"seed_gids": seeds,
+		"paint_anchor": paint_anchor,
 	}
 
 

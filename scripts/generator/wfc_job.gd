@@ -1,9 +1,17 @@
-# agent: composer-2.5 | 2026-07-08 | preload wfc_core breaks cycle | e5f6a7
+# agent: composer-2.5 | 2026-07-08 | moderated seam backtracking | f7a8b9
 extends RefCounted
 
 const Core := preload("res://scripts/generator/wfc_core.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
+const GenService := preload("res://scripts/generator/service.gd")
+
+const _DELTA := [
+	Vector2i(0, -1),
+	Vector2i(1, 0),
+	Vector2i(0, 1),
+	Vector2i(-1, 0),
+]
 
 var cancelled := false
 var finished := false
@@ -27,10 +35,15 @@ var ready := false
 
 var collapse_stack: Array = []
 var tried_picks: Dictionary = {}
-var repeat_penalty: float = 1.0
 var _initial_seed: PackedInt32Array = PackedInt32Array()
 var _retry_cell: int = -1
 var _exhausted_cells := {}
+var _bfs_wave: PackedInt32Array = PackedInt32Array()
+var _last_collapsed: int = -1
+var _anchor_mask: PackedByteArray = PackedByteArray()
+var _wave_source_mask: PackedByteArray = PackedByteArray()
+var _backtrack_incidents: int = 0
+var _backtrack_pops: int = 0
 
 
 func _init(
@@ -43,21 +56,24 @@ func _init(
 	rules = p_rules
 	constraints = p_constraints
 	base_seed = p_seed
-	options = p_options
-	repeat_penalty = clampf(float(options.get("repeat_penalty", 1.0)), 0.0, 1.0)
+	options = GenService.default_options()
+	for key in p_options:
+		options[key] = p_options[key]
+
+	w = constraints.width
+	h = constraints.height
+	n = w * h
+	_initial_seed = _read_seed_gids(constraints)
 
 	var tiles := GenRules.generatable_tiles(rules, p_manifest)
-	tiles = Core._merge_fixed_tiles(tiles, constraints)
+	tiles = Core.merge_runtime_tiles(rules, tiles, constraints, _initial_seed)
 	if tiles.is_empty():
 		finished = true
 		return
 
 	ctx = Core._build_context(rules, tiles)
+	Core._alias_signature_members(rules, ctx)
 	Core._augment_compat_from_constraints(constraints, ctx)
-	w = constraints.width
-	h = constraints.height
-	n = w * h
-	_initial_seed = _read_seed_gids(constraints)
 	_start_attempt()
 
 
@@ -92,16 +108,15 @@ func step() -> Dictionary:
 			_retry_cell = -1
 			best = -1
 	if best < 0:
-		best = Core._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
-
+		best = _pick_next_cell()
 	if best < 0:
-		return _finish_now(true, false)
+		return _finish_now(true, false, "no collapsible cells")
 
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var exclude: Array = tried_picks.get(best, [])
 	if Core.untried_domain_count(domains[best], exclude) == 0:
-		return _skip_cell(best)
+		return _handle_skip(best)
 
 	var picked_idx: int = Core._weighted_pick_idx(
 		rules,
@@ -114,8 +129,12 @@ func step() -> Dictionary:
 		w,
 		h,
 		exclude,
-		repeat_penalty,
+		_last_collapsed,
+		constraints,
+		ctx,
 	)
+	if picked_idx < 0:
+		return _handle_skip(best)
 
 	var prev_domain: PackedByteArray = domains[best].duplicate()
 	var prev_count: int = domain_counts[best]
@@ -125,26 +144,37 @@ func step() -> Dictionary:
 	domains[best] = picked_domain
 	domain_counts[best] = 1
 	done[best] = 1
-	out[best] = idx_to_gid[picked_idx]
+	var rep_gid: int = idx_to_gid[picked_idx]
+	out[best] = rep_gid
 
 	var queue: Array = [best]
 	if not Core._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
-		done[best] = 0
-		out[best] = 0
-		domains[best] = prev_domain
-		domain_counts[best] = prev_count
+		return _handle_collapse_failure(best, prev_domain, prev_count, picked_idx)
+
+	if not Core.repair_continue_conflicts_at(
+		best,
+		_initial_seed,
+		constraints,
+		domains,
+		domain_counts,
+		done,
+		out,
+		w,
+		h,
+		ctx,
+	):
+		return _handle_collapse_failure(best, prev_domain, prev_count, picked_idx)
+
+	if Core.cell_has_bad_adjacency(best, out, done, w, h, ctx):
+		_undo_open_collapse(best, prev_domain, prev_count)
 		_record_tried(best, picked_idx)
 		if not Core.repropagate(
 			domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
 		):
-			return _skip_cell(best)
-		_apply_exhausted_cells(count)
-		var tried: Array = tried_picks.get(best, [])
-		var remaining: int = Core.untried_domain_count(prev_domain, tried)
-		if remaining > 0:
-			_retry_cell = best
-			return {"finished": false, "retry": true, "idx": best}
-		return _skip_cell(best)
+			return _handle_skip(best)
+		return _handle_failure_after_tried(best, prev_domain)
+
+	out[best] = GenRules.resolve_generatable_gid(rules, rep_gid, rng)
 
 	collapse_stack.append({
 		"idx": best,
@@ -155,12 +185,129 @@ func step() -> Dictionary:
 	})
 	tried_picks.erase(best)
 	_retry_cell = -1
+	_last_collapsed = best
+	_bfs_update_wave(best)
 
 	return {
 		"finished": false,
 		"idx": best,
 		"gid": out[best],
 	}
+
+
+func _pick_next_cell() -> int:
+	var best := Core._pick_collapse_cell(
+		constraints,
+		domain_counts,
+		done,
+		w,
+		h,
+		rng,
+		true,
+		_bfs_wave,
+		_last_collapsed,
+		_anchor_mask,
+	)
+	if best >= 0:
+		return best
+	Core._recover_local_frontier_domains(
+		domains, domain_counts, done, out, constraints, w, h, ctx, _exhausted_cells
+	)
+	return Core._pick_collapse_cell(
+		constraints,
+		domain_counts,
+		done,
+		w,
+		h,
+		rng,
+		true,
+		_bfs_wave,
+		_last_collapsed,
+		_anchor_mask,
+	)
+
+
+func _undo_open_collapse(idx: int, prev_domain: PackedByteArray, prev_count: int) -> void:
+	done[idx] = 0
+	out[idx] = 0
+	domains[idx] = prev_domain
+	domain_counts[idx] = prev_count
+
+
+func _handle_collapse_failure(
+	idx: int,
+	prev_domain: PackedByteArray,
+	prev_count: int,
+	picked_idx: int,
+) -> Dictionary:
+	_undo_open_collapse(idx, prev_domain, prev_count)
+	_record_tried(idx, picked_idx)
+	if not Core.repropagate(
+		domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
+	):
+		return _handle_skip(idx)
+	return _handle_failure_after_tried(idx, prev_domain)
+
+
+func _handle_failure_after_tried(idx: int, prev_domain: PackedByteArray) -> Dictionary:
+	var tried: Array = tried_picks.get(idx, [])
+	var remaining: int = Core.untried_domain_count(prev_domain, tried)
+	if remaining > 0:
+		_retry_cell = idx
+		return {"finished": false, "retry": true, "idx": idx}
+	if _try_backtrack(idx):
+		return {"finished": false, "backtrack": true, "idx": _retry_cell}
+	return _handle_skip(idx)
+
+
+func _handle_skip(idx: int) -> Dictionary:
+	if Core._touches_done(idx, done, w, h) and _try_backtrack(idx):
+		return {"finished": false, "backtrack": true, "idx": _retry_cell}
+	return _skip_cell(idx)
+
+
+func _try_backtrack(retry_idx: int) -> bool:
+	if not _backtrack_budget_ok():
+		return false
+	if collapse_stack.is_empty():
+		return false
+
+	_backtrack_incidents += 1
+	var depth_limit: int = int(options.get("backtrack_depth", 5))
+	var target_idx := retry_idx
+	var pops := 0
+
+	while pops < depth_limit and not collapse_stack.is_empty():
+		var entry: Dictionary = collapse_stack.pop_back()
+		pops += 1
+		_backtrack_pops += 1
+		_exhausted_cells.erase(int(entry.idx))
+		if entry.has("tile_idx"):
+			_record_tried(int(entry.idx), int(entry.tile_idx))
+		target_idx = int(entry.idx)
+		if constraints.modes[target_idx] == GenConstraints.Mode.GENERATE:
+			break
+
+	if pops <= 0:
+		return false
+
+	if not Core.repropagate(
+		domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
+	):
+		return false
+
+	_exhausted_cells.clear()
+	_last_collapsed = collapse_stack.back().idx if not collapse_stack.is_empty() else -1
+	_retry_cell = target_idx
+	return true
+
+
+func _backtrack_budget_ok() -> bool:
+	if _backtrack_incidents >= int(options.get("backtrack_incidents", 20)):
+		return false
+	if _backtrack_pops >= int(options.get("backtrack_cells", 50)):
+		return false
+	return true
 
 
 func _skip_cell(idx: int) -> Dictionary:
@@ -201,6 +348,7 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 	var method := "wfc"
 	if filled.done < filled.generatable:
 		method = "wfc_partial"
+	var bad_adj: int = Core.count_bad_adjacency(gids, w, h, ctx)
 	var success: bool = (not was_cancelled) and (ok or int(filled.done) > 0)
 	return {
 		"finished": true,
@@ -211,6 +359,8 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 		"method": method,
 		"filled": filled.done,
 		"total": filled.generatable,
+		"bad_adj": bad_adj,
+		"backtracks": _backtrack_incidents,
 		"error": reason,
 	}
 
@@ -222,6 +372,9 @@ func _start_attempt() -> void:
 	tried_picks.clear()
 	_retry_cell = -1
 	_exhausted_cells.clear()
+	_last_collapsed = -1
+	_backtrack_incidents = 0
+	_backtrack_pops = 0
 
 	var count: int = ctx.count
 	var all_domain: PackedByteArray = ctx.all_domain
@@ -274,13 +427,67 @@ func _start_attempt() -> void:
 
 	var seeds: Array = Core._collect_propagate_seeds(constraints, done, out, w, h)
 	if not seeds.is_empty():
-		Core._propagate_one_hop(
-			seeds, domains, domain_counts, done, out, constraints, w, h, ctx
+		Core.finalize_init_domains(
+			constraints,
+			_initial_seed,
+			domains,
+			domain_counts,
+			done,
+			out,
+			w,
+			h,
+			ctx,
 		)
-		for i in n:
-			if done[i]:
-				continue
-			if domain_counts[i] == 0:
-				domains[i] = Core._domain_copy(all_domain)
-				domain_counts[i] = count
+	_bfs_init_waves()
 	ready = true
+
+
+func _build_anchor_mask() -> void:
+	_anchor_mask = PackedByteArray()
+	_anchor_mask.resize(n)
+	_anchor_mask.fill(0)
+	var has_paint := false
+	if constraints.has("paint_anchor"):
+		var pa: PackedByteArray = constraints.paint_anchor
+		for i in mini(n, pa.size()):
+			if pa[i]:
+				_anchor_mask[i] = 1
+				has_paint = true
+	for i in n:
+		if _initial_seed[i] > 0 and done[i]:
+			_anchor_mask[i] = 1
+			has_paint = true
+	if not has_paint:
+		for i in n:
+			if constraints.modes[i] == GenConstraints.Mode.FIXED:
+				_anchor_mask[i] = 1
+
+
+func _build_wave_source_mask() -> void:
+	_build_anchor_mask()
+	_wave_source_mask = _anchor_mask.duplicate()
+	for i in n:
+		if constraints.modes[i] != GenConstraints.Mode.FIXED:
+			continue
+		if _anchor_mask[i]:
+			continue
+		_wave_source_mask[i] = 1
+
+
+func _bfs_init_waves() -> void:
+	_build_wave_source_mask()
+	_bfs_wave = Core.bfs_wave_from_anchors(constraints, _wave_source_mask, w, h)
+
+
+func _bfs_update_wave(collapsed_idx: int) -> void:
+	var base: int = _bfs_wave[collapsed_idx]
+	var x := collapsed_idx % w
+	var y := collapsed_idx / w
+	for d in 4:
+		var np: Vector2i = Vector2i(x, y) + _DELTA[d]
+		if np.x < 0 or np.y < 0 or np.x >= w or np.y >= h:
+			continue
+		var ni: int = np.y * w + np.x
+		if done[ni]:
+			continue
+		_bfs_wave[ni] = mini(_bfs_wave[ni], base + 1)

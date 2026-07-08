@@ -1,23 +1,26 @@
-# agent: composer-2.5 | 2026-07-07 | rgb+topo edges tight alias | k6l7m8
+# agent: composer-2.5 | 2026-07-08 | 2x2 palette signatures + downscaled edges | s1g2h3
 extends RefCounted
 
 const DIRS := ["north", "east", "south", "west"]
 const OPPOSITE := {"north": "south", "east": "west", "south": "north", "west": "east"}
-const DEFAULT_MAX_ALIAS_CLASS := 4
 
 
 static func analyze_atlas(manifest: Dictionary) -> Dictionary:
-	var adjacency: Dictionary = {}
-	var tile_classes: Array = []
-	var topology: Dictionary = {}
+	var empty := {
+		"signatures": {},
+		"gid_to_sig": {},
+		"palette": [],
+		"sig_adjacency": {},
+		"tile_descs": {},
+	}
 	var atlas_path: String = str(manifest.get("atlas", ""))
 	if atlas_path.is_empty() or not FileAccess.file_exists(atlas_path):
 		push_warning("AtlasAnalyze: missing atlas %s" % atlas_path)
-		return {"adjacency": adjacency, "tile_classes": tile_classes, "topology": topology}
+		return empty
 
 	var img := Image.load_from_file(ProjectSettings.globalize_path(atlas_path))
 	if img == null:
-		return {"adjacency": adjacency, "tile_classes": tile_classes, "topology": topology}
+		return empty
 
 	var analyze: Dictionary = manifest.get("analyze", {})
 	var tw: int = _tile_w(manifest)
@@ -26,272 +29,268 @@ static func analyze_atlas(manifest: Dictionary) -> Dictionary:
 	var row_count: int = int(manifest.get("rows", 0))
 	var first_gid: int = int(manifest.get("first_gid", 1))
 	if cols <= 0 or row_count <= 0:
-		return {"adjacency": adjacency, "tile_classes": tile_classes, "topology": topology}
+		return empty
 
-	var quant_bits: int = clampi(int(analyze.get("color_quantize", 24)), 8, 32)
-	var edge_quant_bits: int = clampi(int(analyze.get("edge_quantize", 32)), 8, 32)
-	var edge_quant_shift: int = _quant_shift_from_bits(edge_quant_bits)
-	var alias_threshold: float = clampf(float(analyze.get("alias_threshold", 0.85)), 0.5, 1.0)
-	var alias_auto: bool = analyze.get("alias_auto", true)
-	var alias_max_col: int = maxi(int(analyze.get("alias_max_col_distance", 1)), 1)
-	var alias_max_row: int = maxi(int(analyze.get("alias_max_row_distance", 1)), 1)
-	var max_class_size: int = maxi(
-		int(analyze.get("alias_max_class_size", DEFAULT_MAX_ALIAS_CLASS)), 2
-	)
-	max_class_size = mini(max_class_size, 12)
+	var grid: int = maxi(int(analyze.get("visual_grid", 2)), 2)
+	var palette_max: int = clampi(int(analyze.get("palette_max", 64)), 8, 256)
+	var alpha_cutoff: int = clampi(int(analyze.get("transparent_alpha", 128)), 1, 255)
 
+	var palette: Array = [{"r": 0, "g": 0, "b": 0, "a": 0}]
+	var color_to_id: Dictionary = {"0,0,0,0": 0}
 	var tile_count: int = cols * row_count
-	var descs: Array = []
-	descs.resize(tile_count)
+	var gid_to_sig: Dictionary = {}
+	var signatures: Dictionary = {}
+	var descs: Dictionary = {}
 
 	for local in tile_count:
 		var atlas := Vector2i(local % cols, local / cols)
 		var rect := Rect2i(atlas.x * tw, atlas.y * th, tw, th)
 		var gid: int = first_gid + local
-		var north_topo := _edge_topology(img, rect, "north", tw, th)
-		var east_topo := _edge_topology(img, rect, "east", tw, th)
-		var south_topo := _edge_topology(img, rect, "south", tw, th)
-		var west_topo := _edge_topology(img, rect, "west", tw, th)
-		descs[local] = {
-			"local": local,
-			"gid": gid,
-			"atlas_y": atlas.y,
-			"atlas_x": atlas.x,
-			"north_topo": north_topo,
-			"east_topo": east_topo,
-			"south_topo": south_topo,
-			"west_topo": west_topo,
-			"north_key": _edge_match_key(img, rect, "north", tw, th, edge_quant_shift, north_topo),
-			"east_key": _edge_match_key(img, rect, "east", tw, th, edge_quant_shift, east_topo),
-			"south_key": _edge_match_key(img, rect, "south", tw, th, edge_quant_shift, south_topo),
-			"west_key": _edge_match_key(img, rect, "west", tw, th, edge_quant_shift, west_topo),
-			"fill": _tile_histogram(img, rect, tw, th, quant_bits),
-		}
-		if analyze.get("save_topology", false):
-			topology[str(gid)] = {
-				"north": north_topo,
-				"east": east_topo,
-				"south": south_topo,
-				"west": west_topo,
+		var cells: PackedInt32Array = _downsample_grid(img, rect, tw, th, grid, palette, color_to_id, palette_max, alpha_cutoff)
+		if cells.size() != grid * grid:
+			continue
+		var sig: String = _cells_to_sig(cells)
+		var edges: Dictionary
+		if grid == 2:
+			edges = {
+				"north": int(cells[0]),
+				"east": int(cells[1]),
+				"south": int(cells[2]),
+				"west": int(cells[0]),
+			}
+		else:
+			edges = {
+				"north": int(cells[0]),
+				"east": int(cells[grid - 1]),
+				"south": int(cells[(grid - 1) * grid]),
+				"west": int(cells[0]),
 			}
 
-	if alias_auto:
-		tile_classes = _build_tile_classes(
-			descs, cols, row_count, alias_threshold, alias_max_col, alias_max_row, max_class_size
-		)
-	_build_local_adjacency(adjacency, descs, tile_count)
+		gid_to_sig[str(gid)] = sig
+		if not signatures.has(sig):
+			signatures[sig] = []
+		if not signatures[sig].has(gid):
+			signatures[sig].append(gid)
+		descs[str(gid)] = {"sig": sig, "edges": edges, "cells": cells}
 
-	return {"adjacency": adjacency, "tile_classes": tile_classes, "topology": topology}
+	for sig in signatures:
+		signatures[sig].sort()
 
+	var sig_adjacency: Dictionary = _build_sig_adjacency_from_descs(descs, gid_to_sig)
 
-static func max_alias_class_size(rules: Dictionary) -> int:
-	return maxi(int(rules.get("stats", {}).get("alias_max_class_size", DEFAULT_MAX_ALIAS_CLASS)), 2)
-
-
-static func adjacency_from_edges(manifest: Dictionary) -> Dictionary:
-	return analyze_atlas(manifest).adjacency
-
-
-static func class_for_gid(rules: Dictionary, gid: int) -> Array:
-	var cap: int = max_alias_class_size(rules)
-	for class_v in rules.get("tile_classes", []):
-		if class_v is not Array or class_v.size() > cap:
-			continue
-		for member in class_v:
-			if int(member) == gid:
-				return class_v
-	return [gid]
+	return {
+		"signatures": signatures,
+		"gid_to_sig": gid_to_sig,
+		"palette": _palette_to_hex(palette),
+		"sig_adjacency": sig_adjacency,
+		"tile_descs": descs,
+	}
 
 
-static func _build_local_adjacency(adjacency: Dictionary, descs: Array, tile_count: int) -> void:
-	var north_match_south: Dictionary = {}
-	var east_match_west: Dictionary = {}
+static func sig_for_gid(rules: Dictionary, gid: int) -> String:
+	return str(rules.get("gid_to_sig", {}).get(str(gid), ""))
+
+
+static func signature_members(rules: Dictionary, sig: String) -> Array:
+	var node: Variant = rules.get("signatures", {}).get(sig, [])
+	return node if node is Array else []
+
+
+static func generatable_members(rules: Dictionary, sig: String) -> Array:
+	var node: Variant = rules.get("generatable_members", {}).get(sig, [])
+	if node is Array and not node.is_empty():
+		return node
+	return signature_members(rules, sig)
+
+
+static func remap_gid_for_analyze(rules: Dictionary, gid: int) -> int:
+	var gid_to_sig: Dictionary = rules.get("gid_to_sig", {})
+	if gid_to_sig.is_empty():
+		return gid
+	var sig: String = str(gid_to_sig.get(str(gid), ""))
+	if sig.is_empty():
+		return gid
+	var bg_sig: String = str(rules.get("background_sig", ""))
+	var bg_gid: int = int(rules.get("background_gid", 0))
+	if sig == bg_sig and gid != bg_gid and bg_gid > 0:
+		return bg_gid
+	return gid
+
+
+static func _build_sig_adjacency_from_descs(descs: Dictionary, gid_to_sig: Dictionary) -> Dictionary:
 	var south_match_north: Dictionary = {}
+	var north_match_south: Dictionary = {}
 	var west_match_east: Dictionary = {}
+	var east_match_west: Dictionary = {}
 
-	for local in tile_count:
-		var d: Dictionary = descs[local]
-		if not _is_meaningful_tile(d):
+	for gid_key in descs:
+		var d: Dictionary = descs[gid_key]
+		var edges: Dictionary = d.edges
+		var gid: int = int(gid_key)
+		_bucket_append(south_match_north, str(edges.north), gid)
+		_bucket_append(north_match_south, str(edges.south), gid)
+		_bucket_append(west_match_east, str(edges.east), gid)
+		_bucket_append(east_match_west, str(edges.west), gid)
+
+	var sig_adj: Dictionary = {}
+	for gid_key in descs:
+		var d: Dictionary = descs[gid_key]
+		var sig_a: String = str(d.sig)
+		var edges: Dictionary = d.edges
+		_ensure_sig_adj(sig_adj, sig_a)
+		for nb in south_match_north.get(str(edges.north), []):
+			var sig_b: String = str(gid_to_sig.get(str(int(nb)), ""))
+			if sig_b.is_empty() or sig_b == sig_a:
+				continue
+			_add_sig_pair(sig_adj, sig_a, sig_b, "north")
+		for nb in east_match_west.get(str(edges.east), []):
+			var sig_b2: String = str(gid_to_sig.get(str(int(nb)), ""))
+			if sig_b2.is_empty() or sig_b2 == sig_a:
+				continue
+			_add_sig_pair(sig_adj, sig_a, sig_b2, "east")
+		for nb in north_match_south.get(str(edges.south), []):
+			var sig_b3: String = str(gid_to_sig.get(str(int(nb)), ""))
+			if sig_b3.is_empty() or sig_b3 == sig_a:
+				continue
+			_add_sig_pair(sig_adj, sig_a, sig_b3, "south")
+		for nb in west_match_east.get(str(edges.west), []):
+			var sig_b4: String = str(gid_to_sig.get(str(int(nb)), ""))
+			if sig_b4.is_empty() or sig_b4 == sig_a:
+				continue
+			_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
+	return sig_adj
+
+
+static func expand_sig_adjacency_to_gids(
+	sig_adjacency: Dictionary,
+	signatures: Dictionary,
+) -> Dictionary:
+	var adjacency: Dictionary = {}
+	for sig_a in sig_adjacency:
+		var gids_a: Array = signatures.get(sig_a, [])
+		if gids_a.is_empty():
 			continue
-		var gid: int = d.gid
-		_bucket_append(north_match_south, d.north_key, gid)
-		_bucket_append(east_match_west, d.east_key, gid)
-		_bucket_append(south_match_north, d.south_key, gid)
-		_bucket_append(west_match_east, d.west_key, gid)
-
-	for local in tile_count:
-		var da: Dictionary = descs[local]
-		if not _is_meaningful_tile(da):
+		var node: Variant = sig_adjacency[sig_a]
+		if node is not Dictionary:
 			continue
-		var gid_a: int = da.gid
-		_ensure_adj(adjacency, gid_a)
-		for nb in north_match_south.get(da.north_key, []):
-			if int(nb) != gid_a:
-				_add_pair(adjacency, gid_a, int(nb), "north")
-		for nb in east_match_west.get(da.east_key, []):
-			if int(nb) != gid_a:
-				_add_pair(adjacency, gid_a, int(nb), "east")
-		for nb in south_match_north.get(da.south_key, []):
-			if int(nb) != gid_a:
-				_add_pair(adjacency, gid_a, int(nb), "south")
-		for nb in west_match_east.get(da.west_key, []):
-			if int(nb) != gid_a:
-				_add_pair(adjacency, gid_a, int(nb), "west")
-
-
-static func _build_tile_classes(
-	descs: Array,
-	cols: int,
-	row_count: int,
-	alias_threshold: float,
-	alias_max_col: int,
-	alias_max_row: int,
-	max_class_size: int,
-) -> Array:
-	var n: int = descs.size()
-	var visited: Dictionary = {}
-	var classes: Array = []
-
-	for i in n:
-		if visited.has(i):
-			continue
-		if not _is_meaningful_tile(descs[i]):
-			continue
-
-		var group_locals: Array = [i]
-		visited[i] = true
-		var queue: Array = [i]
-		var head := 0
-		while head < queue.size() and group_locals.size() < max_class_size:
-			var cur: int = queue[head]
-			head += 1
-			for nj in _atlas_neighbors(cur, cols, row_count):
-				if visited.has(nj):
+		for dir_name in DIRS:
+			var bucket: Variant = node.get(dir_name, {})
+			if bucket is not Dictionary:
+				continue
+			for sig_b in bucket:
+				var gids_b: Array = signatures.get(str(sig_b), [])
+				if gids_b.is_empty():
 					continue
-				if not _should_alias(descs[cur], descs[nj], alias_threshold, alias_max_col, alias_max_row):
-					continue
-				visited[nj] = true
-				group_locals.append(nj)
-				queue.append(nj)
-
-		if group_locals.size() < 2:
-			continue
-		var gids: Array = []
-		for local in group_locals:
-			gids.append(descs[local].gid)
-		gids.sort()
-		classes.append(gids)
-
-	classes.sort_custom(func(a, b): return int(a[0]) < int(b[0]))
-	return classes
+				var count: int = int(bucket[sig_b])
+				for gid_a in gids_a:
+					for gid_b in gids_b:
+						if int(gid_a) == int(gid_b):
+							continue
+						_ensure_adj(adjacency, int(gid_a))
+						var ak := str(gid_a)
+						var bk := str(gid_b)
+						adjacency[ak][dir_name][bk] = adjacency[ak][dir_name].get(bk, 0) + count
+	return adjacency
 
 
-static func _atlas_neighbors(local: int, cols: int, row_count: int) -> Array:
-	var ax: int = local % cols
-	var ay: int = local / cols
-	var out: Array = []
-	for delta in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		var nx: int = ax + delta.x
-		var ny: int = ay + delta.y
-		if nx < 0 or ny < 0 or nx >= cols or ny >= row_count:
-			continue
-		out.append(ny * cols + nx)
+static func _downsample_grid(
+	img: Image,
+	rect: Rect2i,
+	tw: int,
+	th: int,
+	grid: int,
+	palette: Array,
+	color_to_id: Dictionary,
+	palette_max: int,
+	alpha_cutoff: int,
+) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	out.resize(grid * grid)
+	var cell_w: int = maxi(tw / grid, 1)
+	var cell_h: int = maxi(th / grid, 1)
+	for gy in grid:
+		for gx in grid:
+			var r_sum := 0.0
+			var g_sum := 0.0
+			var b_sum := 0.0
+			var a_sum := 0.0
+			var n := 0
+			for py in cell_h:
+				for px in cell_w:
+					var x: int = rect.position.x + gx * cell_w + px
+					var y: int = rect.position.y + gy * cell_h + py
+					if x >= rect.position.x + tw or y >= rect.position.y + th:
+						continue
+					var c: Color = img.get_pixel(x, y)
+					r_sum += c.r
+					g_sum += c.g
+					b_sum += c.b
+					a_sum += c.a
+					n += 1
+			var idx: int = gy * grid + gx
+			if n <= 0 or a_sum / float(n) < float(alpha_cutoff) / 255.0:
+				out[idx] = 0
+				continue
+			var avg := Color(r_sum / n, g_sum / n, b_sum / n, a_sum / n)
+			out[idx] = _palette_index(avg, palette, color_to_id, palette_max, alpha_cutoff)
 	return out
 
 
-static func _should_alias(
-	a: Dictionary,
-	b: Dictionary,
-	alias_threshold: float,
-	alias_max_col: int,
-	alias_max_row: int,
-) -> bool:
-	if not _is_meaningful_tile(a) or not _is_meaningful_tile(b):
-		return false
-	if _hist_similarity(a.fill, b.fill) < alias_threshold:
-		return false
-
-	if a.atlas_y == b.atlas_y and absi(a.atlas_x - b.atlas_x) <= alias_max_col:
-		if a.north_topo == b.north_topo and a.south_topo == b.south_topo:
-			return true
-	if a.atlas_x == b.atlas_x and absi(a.atlas_y - b.atlas_y) <= alias_max_row:
-		if a.east_topo == b.east_topo and a.west_topo == b.west_topo:
-			return true
-	return false
-
-
-static func _edge_match_key(
-	img: Image,
-	rect: Rect2i,
-	side: String,
-	tw: int,
-	th: int,
-	quant_shift: int,
-	topo: String,
-) -> String:
-	return "%s|%s" % [topo, _edge_rgb_key(img, rect, side, tw, th, quant_shift)]
+static func _palette_index(
+	color: Color,
+	palette: Array,
+	color_to_id: Dictionary,
+	palette_max: int,
+	alpha_cutoff: int,
+) -> int:
+	if color.a8 < alpha_cutoff:
+		return 0
+	var qr: int = int(color.r8)
+	var qg: int = int(color.g8)
+	var qb: int = int(color.b8)
+	var key := "%d,%d,%d,%d" % [qr, qg, qb, 255]
+	if color_to_id.has(key):
+		return int(color_to_id[key])
+	if palette.size() >= palette_max:
+		return _nearest_palette_id(color, palette, alpha_cutoff)
+	var id: int = palette.size()
+	palette.append({"r": qr, "g": qg, "b": qb, "a": 255})
+	color_to_id[key] = id
+	return id
 
 
-static func _edge_rgb_key(img: Image, rect: Rect2i, side: String, tw: int, th: int, quant_shift: int) -> String:
-	var parts: PackedStringArray = []
-	match side:
-		"north":
-			for x in tw:
-				parts.append(_edge_rgb_char(img.get_pixel(rect.position.x + x, rect.position.y), quant_shift))
-		"south":
-			for x in tw:
-				parts.append(
-					_edge_rgb_char(
-						img.get_pixel(rect.position.x + x, rect.position.y + th - 1), quant_shift
-					)
-				)
-		"west":
-			for y in th:
-				parts.append(_edge_rgb_char(img.get_pixel(rect.position.x, rect.position.y + y), quant_shift))
-		"east":
-			for y in th:
-				parts.append(
-					_edge_rgb_char(
-						img.get_pixel(rect.position.x + tw - 1, rect.position.y + y), quant_shift
-					)
-				)
-	return ",".join(parts)
+static func _nearest_palette_id(color: Color, palette: Array, alpha_cutoff: int) -> int:
+	if color.a8 < alpha_cutoff:
+		return 0
+	var best_id := 1
+	var best_dist := 999999.0
+	for i in range(1, palette.size()):
+		var p: Dictionary = palette[i]
+		var dr: float = float(color.r8) - float(p.r)
+		var dg: float = float(color.g8) - float(p.g)
+		var db: float = float(color.b8) - float(p.b)
+		var dist: float = dr * dr + dg * dg + db * db
+		if dist < best_dist:
+			best_dist = dist
+			best_id = i
+	return best_id
 
 
-static func _edge_rgb_char(color: Color, quant_shift: int) -> String:
-	if color.a8 < 128:
-		return "T"
-	return str(_quantize_color(color, quant_shift))
+static func _cells_to_sig(cells: PackedInt32Array) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	for c in cells:
+		parts.append(str(c))
+	return "-".join(parts)
 
 
-static func _bucket_append(into: Dictionary, key: String, gid: int) -> void:
-	if key.is_empty():
-		return
-	if not into.has(key):
-		into[key] = []
-	into[key].append(gid)
-
-
-static func _edge_topology(img: Image, rect: Rect2i, side: String, tw: int, th: int) -> String:
-	var parts: PackedStringArray = []
-	match side:
-		"north":
-			for x in tw:
-				parts.append(_topo_char(img.get_pixel(rect.position.x + x, rect.position.y)))
-		"south":
-			for x in tw:
-				parts.append(_topo_char(img.get_pixel(rect.position.x + x, rect.position.y + th - 1)))
-		"west":
-			for y in th:
-				parts.append(_topo_char(img.get_pixel(rect.position.x, rect.position.y + y)))
-		"east":
-			for y in th:
-				parts.append(_topo_char(img.get_pixel(rect.position.x + tw - 1, rect.position.y + y)))
-	return "".join(parts)
-
-
-static func _topo_char(color: Color) -> String:
-	return "S" if color.a8 >= 128 else "T"
+static func _palette_to_hex(palette: Array) -> Array:
+	var out: Array = []
+	for p in palette:
+		if p is Dictionary:
+			out.append("#%02x%02x%02x" % [int(p.r), int(p.g), int(p.b)])
+		else:
+			out.append("#000000")
+	return out
 
 
 static func _tile_w(manifest: Dictionary) -> int:
@@ -304,107 +303,32 @@ static func _tile_h(manifest: Dictionary) -> int:
 	return int(tile_size[1]) if tile_size.size() > 1 else 8
 
 
-static func _quant_shift_from_bits(bits: int) -> int:
-	if bits >= 32:
-		return 0
-	return clampi(8 - bits / 3, 1, 7)
-
-
-static func _quantize_color(color: Color, quant_shift: int) -> int:
-	if color.a8 < 128:
-		return -1
-	if quant_shift <= 0:
-		return (int(color.r8) << 16) | (int(color.g8) << 8) | int(color.b8)
-	var r: int = int(color.r8) >> quant_shift
-	var g: int = int(color.g8) >> quant_shift
-	var b: int = int(color.b8) >> quant_shift
-	return (r << 10) | (g << 5) | b
-
-
-static func _tile_histogram(
-	img: Image, rect: Rect2i, tw: int, th: int, quant_bits: int
-) -> String:
-	var quant_shift: int = _quant_shift_from_bits(quant_bits)
-	var hist: Dictionary = {}
-	for y in th:
-		for x in tw:
-			var q: int = _quantize_color(img.get_pixel(rect.position.x + x, rect.position.y + y), quant_shift)
-			if q < 0:
-				continue
-			var key := str(q)
-			hist[key] = int(hist.get(key, 0)) + 1
-	return _hist_to_key(hist)
-
-
-static func _hist_to_key(hist: Dictionary) -> String:
-	if hist.is_empty():
-		return ""
-	var keys: Array = hist.keys()
-	keys.sort()
-	var parts: PackedStringArray = []
-	for key in keys:
-		parts.append("%s:%d" % [key, int(hist[key])])
-	return ",".join(parts)
-
-
-static func _hist_similarity(a: String, b: String) -> float:
-	if a.is_empty() or b.is_empty():
-		return 0.0
-	if a == b:
-		return 1.0
-	var ha: Dictionary = _parse_hist_key(a)
-	var hb: Dictionary = _parse_hist_key(b)
-	var keys: Dictionary = {}
-	for k in ha:
-		keys[k] = true
-	for k in hb:
-		keys[k] = true
-	var dot := 0.0
-	var na := 0.0
-	var nb := 0.0
-	for k in keys:
-		var va: float = float(ha.get(k, 0))
-		var vb: float = float(hb.get(k, 0))
-		dot += va * vb
-		na += va * va
-		nb += vb * vb
-	if na <= 0.0 or nb <= 0.0:
-		return 0.0
-	return dot / (sqrt(na) * sqrt(nb))
-
-
-static func _parse_hist_key(key: String) -> Dictionary:
-	var out: Dictionary = {}
+static func _bucket_append(into: Dictionary, key: String, gid: int) -> void:
 	if key.is_empty():
-		return out
-	for part in key.split(","):
-		if part.is_empty():
-			continue
-		var bits: PackedStringArray = part.split(":")
-		if bits.size() < 2:
-			continue
-		out[bits[0]] = bits[1].to_int()
-	return out
+		return
+	if not into.has(key):
+		into[key] = []
+	if not into[key].has(gid):
+		into[key].append(gid)
 
 
-static func _is_meaningful_tile(desc: Dictionary) -> bool:
-	for key in ["north_topo", "south_topo", "east_topo", "west_topo"]:
-		var topo: String = desc.get(key, "")
-		if topo.is_empty() or not topo.contains("S"):
-			return false
-	if desc.fill.is_empty():
-		return false
-	return true
+static func _ensure_sig_adj(into: Dictionary, sig: String) -> void:
+	if into.has(sig):
+		return
+	into[sig] = {}
+	for d in DIRS:
+		into[sig][d] = {}
+
+
+static func _add_sig_pair(into: Dictionary, sig_a: String, sig_b: String, dir: String) -> void:
+	_ensure_sig_adj(into, sig_a)
+	into[sig_a][dir][sig_b] = into[sig_a][dir].get(sig_b, 0) + 1
 
 
 static func _ensure_adj(adjacency: Dictionary, gid: int) -> void:
 	var key := str(gid)
 	if adjacency.has(key):
 		return
-	adjacency[key] = {"north": {}, "east": {}, "south": {}, "west": {}}
-
-
-static func _add_pair(adjacency: Dictionary, a: int, b: int, dir: String) -> void:
-	var ak := str(a)
-	var bk := str(b)
-	adjacency[ak][dir][bk] = adjacency[ak][dir].get(bk, 0) + 1
+	adjacency[key] = {}
+	for d in DIRS:
+		adjacency[key][d] = {}

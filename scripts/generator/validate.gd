@@ -225,14 +225,24 @@ static func _collect_constraint_warnings(
 	constraints: Dictionary,
 	warnings: Array[String],
 ) -> void:
-	var adjacency: Dictionary = rules.get("adjacency", {})
+	var sig_adj: Dictionary = rules.get("sig_adjacency", {})
+	var gid_to_sig: Dictionary = rules.get("gid_to_sig", {})
 	for i in constraints.modes.size():
 		if constraints.modes[i] != GenConstraints.Mode.FIXED:
 			continue
 		var gid: int = constraints.fixed_gids[i]
 		if gid <= 0:
 			continue
+		if not sig_adj.is_empty():
+			var sig: String = str(gid_to_sig.get(str(gid), ""))
+			if sig.is_empty():
+				warnings.append("fixed tile GID %d has no signature in rules" % gid)
+				continue
+			if not sig_adj.has(sig):
+				warnings.append("fixed tile GID %d signature missing from sig_adjacency" % gid)
+			continue
 		var key := str(gid)
+		var adjacency: Dictionary = rules.get("adjacency", {})
 		if not adjacency.has(key):
 			warnings.append(
 				"fixed tile GID %d not in rules adjacency (unknown to reference map)" % gid

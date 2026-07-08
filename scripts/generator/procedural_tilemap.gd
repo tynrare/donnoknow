@@ -18,7 +18,6 @@ const FLUSH_INTERVAL_MS := 120
 @export var steps_per_frame: int = 4
 @export var bounds: Rect2i = Rect2i(0, 0, 54, 35)
 @export var context_halo: int = 1
-@export var repeat_penalty: float = 1.0
 
 const BOUNDS_HANDLE_RADIUS := 2.0
 
@@ -36,6 +35,7 @@ var _replace_inner: bool = false
 var _pending_flush: bool = false
 var _flush_scheduled: bool = false
 var _last_flush_ms: int = 0
+var _collapsed_steps: int = 0
 
 
 func _ready() -> void:
@@ -117,9 +117,7 @@ func _is_selected_in_editor() -> bool:
 
 
 func _gen_options_dict() -> Dictionary:
-	return {
-		"repeat_penalty": repeat_penalty,
-	}
+	return {}
 
 
 func _gen_paint_rect() -> Rect2i:
@@ -272,6 +270,7 @@ func _start_wfc_job(replace_inner: bool) -> void:
 		return
 
 	_replace_inner = replace_inner
+	_collapsed_steps = 0
 	_gen_phase = GenPhase.PREP
 	set_process(true)
 	print("ProceduralTilemap: preparing %s…" % bounds)
@@ -360,19 +359,47 @@ func _prep_generation() -> bool:
 	_sync_fixed_paint_to_generated(generated, manifest, constraints, grid_w, grid_h)
 	_flush_generated(false)
 
+	var paint_note := _describe_paint_anchors(manifest, constraints, grid_w, grid_h, halo)
 	var ctx_note := "" if context_count <= 0 else ", %d outside context" % context_count
 	if _replace_inner:
 		print(
-			"ProceduralTilemap: patching %s (%d mutable, %d fixed%s)…"
-			% [bounds, mutate_count, _count_fixed(constraints), ctx_note]
+			"ProceduralTilemap: patching %s (%d mutable, %d fixed%s%s)…"
+			% [bounds, mutate_count, _count_fixed(constraints), ctx_note, paint_note]
 		)
 	else:
 		var mode := "continue" if seed_count > 0 else "new"
 		print(
-			"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s)…"
-			% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note]
+			"ProceduralTilemap: generating %s wfc (%s, %d seeded, %d fixed%s%s)…"
+			% [bounds, mode, seed_count, _count_fixed(constraints), ctx_note, paint_note]
 		)
 	return true
+
+
+func _describe_paint_anchors(
+	manifest: Dictionary,
+	constraints: Dictionary,
+	grid_w: int,
+	grid_h: int,
+	halo: int,
+) -> String:
+	if not constraints.has("paint_anchor"):
+		return ""
+	var pa: PackedByteArray = constraints.paint_anchor
+	var parts: PackedStringArray = PackedStringArray()
+	for y in grid_h:
+		for x in grid_w:
+			var i: int = y * grid_w + x
+			if i >= pa.size() or pa[i] == 0:
+				continue
+			var gid: int = constraints.fixed_gids[i]
+			var lx: int = x - halo
+			var ly: int = y - halo
+			var atlas: Vector2i = GenService.gid_to_atlas(manifest, gid)
+			var atlas_note := "" if atlas.x >= 0 else " INVALID"
+			parts.append("(%d,%d) gid=%d%s" % [lx, ly, gid, atlas_note])
+	if parts.is_empty():
+		return ", 0 paint anchors (fixed tiles must be on this layer)"
+	return ", paint " + ", ".join(parts)
 
 
 func _count_fixed(constraints: Dictionary) -> int:
@@ -397,6 +424,7 @@ func _reset_generation_state() -> void:
 	_replace_inner = false
 	_pending_flush = false
 	_flush_scheduled = false
+	_collapsed_steps = 0
 	set_process(false)
 
 
@@ -498,15 +526,20 @@ func _apply_generated_flush() -> void:
 
 func _log_result(result: Dictionary, w: int, h: int) -> void:
 	print(
-		"ProceduralTilemap: %dx%d method=%s filled=%d/%d seed=%d" % [
+		"ProceduralTilemap: %dx%d method=%s filled=%d/%d collapsed=%d seed=%d" % [
 			w,
 			h,
 			str(result.get("method", "?")),
 			int(result.get("filled", 0)),
 			int(result.get("total", 0)),
+			_collapsed_steps,
 			int(result.get("seed", 0)),
 		]
 	)
+	if _collapsed_steps <= 0 and int(result.get("filled", 0)) <= _count_fixed(_constraints):
+		push_warning(
+			"ProceduralTilemap: no tiles collapsed — paint fixed anchors on this layer and use Patch to refine existing Generated tiles"
+		)
 
 
 func _process(_delta: float) -> void:
@@ -541,6 +574,7 @@ func _spawn_job() -> void:
 		push_error("ProceduralTilemap: failed to start job")
 		_reset_generation_state()
 		return
+	print("ProceduralTilemap: collapsing from %d fixed anchor(s)…" % _count_fixed(_constraints))
 	_gen_phase = GenPhase.RUNNING
 
 
@@ -563,9 +597,12 @@ func _run_wfc_steps() -> void:
 		if step.has("idx") and step.has("gid"):
 			_paint_step_cell(generated, int(step.idx), int(step.gid))
 			painted = true
+			_collapsed_steps += 1
 
 	if painted:
-		_flush_generated(false)
+		_flush_generated(Engine.is_editor_hint())
+	if _collapsed_steps > 0 and _collapsed_steps % 400 == 0:
+		print("ProceduralTilemap: collapsing… %d cells" % _collapsed_steps)
 
 
 func _clear_map() -> void:

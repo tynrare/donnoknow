@@ -14,7 +14,9 @@ const TILED_GID_MASK := 0x1FFFFFFF
 
 static func default_options() -> Dictionary:
 	return {
-		"repeat_penalty": 1.0,
+		"backtrack_depth": 5,
+		"backtrack_incidents": 20,
+		"backtrack_cells": 50,
 	}
 
 
