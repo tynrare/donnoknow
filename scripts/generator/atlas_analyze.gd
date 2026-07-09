@@ -1,4 +1,4 @@
-# agent: composer-2.5 | 2026-07-08 | 2x2 palette signatures + downscaled edges | s1g2h3
+# agent: composer-2.5 | 2026-07-09 | RGB-quad signatures + short hash | s2g3h4
 extends RefCounted
 
 const DIRS := ["north", "east", "south", "west"]
@@ -32,11 +32,11 @@ static func analyze_atlas(manifest: Dictionary) -> Dictionary:
 		return empty
 
 	var grid: int = maxi(int(analyze.get("visual_grid", 2)), 2)
-	var palette_max: int = clampi(int(analyze.get("palette_max", 64)), 8, 256)
 	var alpha_cutoff: int = clampi(int(analyze.get("transparent_alpha", 128)), 1, 255)
+	var color_quantize: int = maxi(int(analyze.get("color_quantize", 0)), 0)
 
 	var palette: Array = [{"r": 0, "g": 0, "b": 0, "a": 0}]
-	var color_to_id: Dictionary = {"0,0,0,0": 0}
+	var color_to_id: Dictionary = {"0,0,0": 0}
 	var tile_count: int = cols * row_count
 	var gid_to_sig: Dictionary = {}
 	var signatures: Dictionary = {}
@@ -46,25 +46,30 @@ static func analyze_atlas(manifest: Dictionary) -> Dictionary:
 		var atlas := Vector2i(local % cols, local / cols)
 		var rect := Rect2i(atlas.x * tw, atlas.y * th, tw, th)
 		var gid: int = first_gid + local
-		var cells: PackedInt32Array = _downsample_grid(img, rect, tw, th, grid, palette, color_to_id, palette_max, alpha_cutoff)
+		var cells: Array = _downsample_rgb_grid(
+			img, rect, tw, th, grid, alpha_cutoff, color_quantize
+		)
 		if cells.size() != grid * grid:
 			continue
-		var sig: String = _cells_to_sig(cells)
+		var sig: String = _rgb_cells_to_sig(cells)
 		var edges: Dictionary
 		if grid == 2:
 			edges = {
-				"north": int(cells[0]),
-				"east": int(cells[1]),
-				"south": int(cells[2]),
-				"west": int(cells[0]),
+				"north": _rgb_key(cells[0]),
+				"east": _rgb_key(cells[1]),
+				"south": _rgb_key(cells[2]),
+				"west": _rgb_key(cells[0]),
 			}
 		else:
 			edges = {
-				"north": int(cells[0]),
-				"east": int(cells[grid - 1]),
-				"south": int(cells[(grid - 1) * grid]),
-				"west": int(cells[0]),
+				"north": _rgb_key(cells[0]),
+				"east": _rgb_key(cells[grid - 1]),
+				"south": _rgb_key(cells[(grid - 1) * grid]),
+				"west": _rgb_key(cells[0]),
 			}
+
+		for cell in cells:
+			_register_palette_rgb(cell, palette, color_to_id)
 
 		gid_to_sig[str(gid)] = sig
 		if not signatures.has(sig):
@@ -158,7 +163,43 @@ static func _build_sig_adjacency_from_descs(descs: Dictionary, gid_to_sig: Dicti
 			if sig_b4.is_empty() or sig_b4 == sig_a:
 				continue
 			_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
+	apply_same_sig_vertical_adj(sig_adj, descs, 2)
 	return sig_adj
+
+
+static func apply_same_sig_vertical_adj(
+	sig_adj: Dictionary,
+	descs: Dictionary,
+	min_count: int = 2,
+) -> void:
+	var by_sig: Dictionary = {}
+	for gid_key in descs:
+		var sig: String = str(descs[gid_key].sig)
+		if not by_sig.has(sig):
+			by_sig[sig] = []
+		by_sig[sig].append(int(gid_key))
+
+	for sig in by_sig:
+		var gids: Array = by_sig[sig]
+		if gids.size() < 2:
+			continue
+		var stackable := false
+		for a in gids:
+			var edges_a: Dictionary = descs[str(a)].edges
+			for b in gids:
+				if int(a) == int(b):
+					continue
+				var edges_b: Dictionary = descs[str(b)].edges
+				if str(edges_a.south) == str(edges_b.north):
+					stackable = true
+					break
+			if stackable:
+				break
+		if stackable:
+			_ensure_sig_adj(sig_adj, sig)
+			var need: int = maxi(min_count, 2)
+			sig_adj[sig]["north"][sig] = maxi(int(sig_adj[sig]["north"].get(sig, 0)), need)
+			sig_adj[sig]["south"][sig] = maxi(int(sig_adj[sig]["south"].get(sig, 0)), need)
 
 
 static func expand_sig_adjacency_to_gids(
@@ -193,27 +234,24 @@ static func expand_sig_adjacency_to_gids(
 	return adjacency
 
 
-static func _downsample_grid(
+static func _downsample_rgb_grid(
 	img: Image,
 	rect: Rect2i,
 	tw: int,
 	th: int,
 	grid: int,
-	palette: Array,
-	color_to_id: Dictionary,
-	palette_max: int,
 	alpha_cutoff: int,
-) -> PackedInt32Array:
-	var out := PackedInt32Array()
-	out.resize(grid * grid)
+	color_quantize: int = 0,
+) -> Array:
+	var out: Array = []
 	var cell_w: int = maxi(tw / grid, 1)
 	var cell_h: int = maxi(th / grid, 1)
 	for gy in grid:
 		for gx in grid:
-			var r_sum := 0.0
-			var g_sum := 0.0
-			var b_sum := 0.0
-			var a_sum := 0.0
+			var r_sum := 0
+			var g_sum := 0
+			var b_sum := 0
+			var a_sum := 0
 			var n := 0
 			for py in cell_h:
 				for px in cell_w:
@@ -222,65 +260,60 @@ static func _downsample_grid(
 					if x >= rect.position.x + tw or y >= rect.position.y + th:
 						continue
 					var c: Color = img.get_pixel(x, y)
-					r_sum += c.r
-					g_sum += c.g
-					b_sum += c.b
-					a_sum += c.a
+					r_sum += c.r8
+					g_sum += c.g8
+					b_sum += c.b8
+					a_sum += c.a8
 					n += 1
-			var idx: int = gy * grid + gx
-			if n <= 0 or a_sum / float(n) < float(alpha_cutoff) / 255.0:
-				out[idx] = 0
+			if n <= 0 or a_sum / n < alpha_cutoff:
+				out.append(Vector3i.ZERO)
 				continue
-			var avg := Color(r_sum / n, g_sum / n, b_sum / n, a_sum / n)
-			out[idx] = _palette_index(avg, palette, color_to_id, palette_max, alpha_cutoff)
+			out.append(
+				Vector3i(
+					_quantize_channel(int(r_sum / n), color_quantize),
+					_quantize_channel(int(g_sum / n), color_quantize),
+					_quantize_channel(int(b_sum / n), color_quantize),
+				)
+			)
 	return out
 
 
-static func _palette_index(
-	color: Color,
+static func _rgb_key(cell: Vector3i) -> String:
+	return "%d,%d,%d" % [cell.x, cell.y, cell.z]
+
+
+static func _rgb_cells_to_sig(cells: Array) -> String:
+	var packed := PackedByteArray()
+	packed.resize(cells.size() * 3)
+	for i in cells.size():
+		var cell: Vector3i = cells[i]
+		packed[i * 3] = cell.x
+		packed[i * 3 + 1] = cell.y
+		packed[i * 3 + 2] = cell.z
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(packed)
+	var digest: PackedByteArray = ctx.finish()
+	return digest.hex_encode().substr(0, 8)
+
+
+static func _register_palette_rgb(
+	cell: Vector3i,
 	palette: Array,
 	color_to_id: Dictionary,
-	palette_max: int,
-	alpha_cutoff: int,
-) -> int:
-	if color.a8 < alpha_cutoff:
-		return 0
-	var qr: int = int(color.r8)
-	var qg: int = int(color.g8)
-	var qb: int = int(color.b8)
-	var key := "%d,%d,%d,%d" % [qr, qg, qb, 255]
+) -> void:
+	var key := _rgb_key(cell)
 	if color_to_id.has(key):
-		return int(color_to_id[key])
-	if palette.size() >= palette_max:
-		return _nearest_palette_id(color, palette, alpha_cutoff)
+		return
 	var id: int = palette.size()
-	palette.append({"r": qr, "g": qg, "b": qb, "a": 255})
 	color_to_id[key] = id
-	return id
+	palette.append({"r": cell.x, "g": cell.y, "b": cell.z, "a": 255 if cell != Vector3i.ZERO else 0})
 
 
-static func _nearest_palette_id(color: Color, palette: Array, alpha_cutoff: int) -> int:
-	if color.a8 < alpha_cutoff:
-		return 0
-	var best_id := 1
-	var best_dist := 999999.0
-	for i in range(1, palette.size()):
-		var p: Dictionary = palette[i]
-		var dr: float = float(color.r8) - float(p.r)
-		var dg: float = float(color.g8) - float(p.g)
-		var db: float = float(color.b8) - float(p.b)
-		var dist: float = dr * dr + dg * dg + db * db
-		if dist < best_dist:
-			best_dist = dist
-			best_id = i
-	return best_id
-
-
-static func _cells_to_sig(cells: PackedInt32Array) -> String:
-	var parts: PackedStringArray = PackedStringArray()
-	for c in cells:
-		parts.append(str(c))
-	return "-".join(parts)
+static func _quantize_channel(value: int, step: int) -> int:
+	if step <= 1:
+		return value
+	return mini(value - (value % step), 255)
 
 
 static func _palette_to_hex(palette: Array) -> Array:

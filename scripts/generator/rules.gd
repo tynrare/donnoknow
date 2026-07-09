@@ -99,6 +99,13 @@ static func analyze_maps(
 		_cap_sig_adjacency(sig_adjacency, max_adj_mates)
 		_symmetrize_sig_adjacency(sig_adjacency)
 
+	GenAtlasAnalyze.apply_same_sig_vertical_adj(
+		sig_adjacency,
+		atlas_result.get("tile_descs", {}),
+		min_adj,
+	)
+	_symmetrize_sig_adjacency(sig_adjacency)
+
 	var generatable_members: Dictionary = _build_generatable_members(
 		signatures, sig_counts, gid_to_sig, bg_gid, bg_sig, min_generatable
 	)

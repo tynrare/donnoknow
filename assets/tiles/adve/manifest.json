@@ -1,8 +1,14 @@
 {
 	"analyze": {
 		"visual_grid": 2,
-		"palette_max": 64,
+		"palette_max": 128,
 		"transparent_alpha": 128,
+		"color_quantize": 38,
+		"signature_groups": [
+			[35, 36, 37],
+			[195, 196, 197],
+			[54, 78, 102]
+		],
 		"maps": true,
 		"max_adj_mates": 16,
 		"min_adj_count": 2,
