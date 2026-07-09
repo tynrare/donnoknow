@@ -1,13 +1,22 @@
 # agent: composer-2.5 | 2026-07-07 | manifest grid 24 cols | f8a9b0
 extends RefCounted
 
-const GenWfc := preload("res://scripts/generator/wfc.gd")
 const GenStitch := preload("res://scripts/generator/stitch.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
-const GenWfcJob := preload("res://scripts/generator/wfc_job.gd")
 const GenTmx := preload("res://scripts/generator/tmx.gd")
 const GenValidate := preload("res://scripts/generator/validate.gd")
+
+const _WFC_SCRIPT := "res://scripts/generator/wfc.gd"
+const _WFC_JOB_SCRIPT := "res://scripts/generator/wfc_job.gd"
+
+
+static func _wfc():
+	return load(_WFC_SCRIPT)
+
+
+static func _wfc_job():
+	return load(_WFC_JOB_SCRIPT)
 
 const DEFAULT_MANIFEST := "res://assets/tiles/adve/manifest.json"
 const TILED_GID_MASK := 0x1FFFFFFF
@@ -17,7 +26,10 @@ static func default_options() -> Dictionary:
 	return {
 		"gen_method": "wfc",
 		"use_patterns": true,
+		"pattern_propagate": false,
 		"backtrack_depth": 8,
+		"backtrack_incidents": 64,
+		"backtrack_cells": 128,
 		"max_restarts": 8,
 		"tile_bias": {},
 		"chunk_size": 8,
@@ -244,7 +256,7 @@ static func generate(
 	if method == "chunk_stitch":
 		return GenStitch.generate(rules, constraints, seed, manifest, opts)
 
-	return GenWfc.generate(rules, constraints, seed, manifest, max_restarts, opts)
+	return _wfc().generate(rules, constraints, seed, manifest, max_restarts, opts)
 
 
 static func create_job(
@@ -254,17 +266,17 @@ static func create_job(
 	seed: int = 0,
 	max_restarts: int = 32,
 	options: Dictionary = {},
-) -> GenWfcJob:
+):
 	if max_restarts == null:
 		max_restarts = 32
 	var opts := default_options()
 	for key in options:
 		opts[key] = options[key]
-	return GenWfcJob.new(rules, constraints, manifest, seed, max_restarts, opts)
+	return _wfc_job().new(rules, constraints, manifest, seed, max_restarts, opts)
 
 
 static func finalize_job(
-	job: GenWfcJob,
+	job,
 	rules: Dictionary,
 	constraints: Dictionary,
 	seed: int,
@@ -280,7 +292,7 @@ static func finalize_job(
 		"method": "wfc_partial",
 		"cancelled": job.cancelled,
 	}
-	return GenWfc._finalize_result(step, rules, constraints, seed, manifest, options)
+	return _wfc()._finalize_result(step, rules, constraints, seed, manifest, options)
 
 
 static func analyze_manifest(manifest: Dictionary, chunk_size: int = 8) -> Dictionary:

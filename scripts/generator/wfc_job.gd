@@ -1,10 +1,15 @@
 # agent: composer-2.5 | 2026-07-07 | seed resume propagate | e2f3a4
 extends RefCounted
 
-const GenWfc := preload("res://scripts/generator/wfc.gd")
 const GenRules := preload("res://scripts/generator/rules.gd")
 const GenConstraints := preload("res://scripts/generator/constraints.gd")
 const GenDebugLog := preload("res://scripts/generator/debug_log.gd")
+
+const _WFC_SCRIPT := "res://scripts/generator/wfc.gd"
+
+
+static func _wfc():
+	return load(_WFC_SCRIPT)
 
 var cancelled := false
 var finished := false
@@ -32,6 +37,7 @@ var collapse_stack: Array = []
 var tried_picks: Dictionary = {}
 var backtrack_depth: int = 8
 var backtracks_used: int = 0
+var _backtrack_pops: int = 0
 var use_patterns: bool = false
 var tile_bias: Dictionary = {}
 var repeat_penalty: float = 1.0
@@ -62,13 +68,20 @@ func _init(
 		max_restarts = int(opt_restarts)
 
 	var tiles := GenRules.generatable_tiles(rules, p_manifest)
-	tiles = GenWfc._merge_fixed_tiles(tiles, constraints)
+	tiles = _wfc()._merge_fixed_tiles(tiles, constraints)
 	if tiles.is_empty():
 		finished = true
 		return
 
-	ctx = GenWfc._build_context(rules, tiles, use_patterns)
-	GenWfc._augment_compat_from_constraints(constraints, ctx)
+	ctx = _wfc()._build_context(
+		rules,
+		tiles,
+		{
+			"use_patterns": use_patterns,
+			"pattern_propagate": bool(options.get("pattern_propagate", false)),
+		},
+	)
+	_wfc()._augment_compat_from_constraints(constraints, ctx)
 	w = constraints.width
 	h = constraints.height
 	n = w * h
@@ -108,23 +121,24 @@ func step() -> Dictionary:
 			_retry_cell = -1
 			best = -1
 	if best < 0:
-		best = GenWfc._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
+		best = _wfc()._pick_collapse_cell(constraints, domain_counts, done, w, h, rng)
 
 	if best < 0:
 		return _finish_now(true, false)
 
-	if not GenWfc._apply_pattern_filter(
-		domains[best], domain_counts, best, out, done, w, h, ctx
-	):
-		return _skip_cell(best)
+	if use_patterns:
+		if not _wfc()._apply_pattern_filter(
+			domains[best], domain_counts, best, out, done, w, h, ctx
+		):
+			return _handle_skip(best)
 
 	var count: int = ctx.count
 	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
 	var exclude: Array = tried_picks.get(best, [])
-	if GenWfc.untried_domain_count(domains[best], exclude) == 0:
+	if _wfc().untried_domain_count(domains[best], exclude) == 0:
 		return _skip_cell(best)
 
-	var picked_idx: int = GenWfc._weighted_pick_idx(
+	var picked_idx: int = _wfc()._weighted_pick_idx(
 		rules,
 		domains[best],
 		idx_to_gid,
@@ -138,6 +152,8 @@ func step() -> Dictionary:
 		exclude,
 		repeat_penalty,
 	)
+	if picked_idx < 0:
+		return _handle_skip(best)
 
 	var prev_domain: PackedByteArray = domains[best].duplicate()
 	var prev_count: int = domain_counts[best]
@@ -150,39 +166,8 @@ func step() -> Dictionary:
 	out[best] = idx_to_gid[picked_idx]
 
 	var queue: Array = [best]
-	if not GenWfc._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
-		done[best] = 0
-		out[best] = 0
-		domains[best] = prev_domain
-		domain_counts[best] = prev_count
-		_record_tried(best, picked_idx)
-		if not GenWfc.repropagate(
-			domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
-		):
-			return _skip_cell(best)
-		_apply_exhausted_cells(count)
-		var tried: Array = tried_picks.get(best, [])
-		var remaining: int = GenWfc.untried_domain_count(prev_domain, tried)
-		#region agent log
-		if remaining <= 0 or attempt <= 2:
-			GenDebugLog.write(
-				"H5",
-				"wfc_job.gd:step",
-				"propagate_fail",
-				{
-					"attempt": attempt,
-					"cell": best,
-					"picked_gid": idx_to_gid[picked_idx],
-					"domain_size": prev_count,
-					"tried": tried.size(),
-					"remaining": remaining,
-				},
-			)
-		#endregion
-		if remaining > 0:
-			_retry_cell = best
-			return {"finished": false, "retry": true, "idx": best}
-		return _skip_cell(best)
+	if not _wfc()._propagate(queue, domains, domain_counts, done, out, constraints, w, h, ctx):
+		return _handle_collapse_failure(best, prev_domain, prev_count, picked_idx)
 
 	collapse_stack.append({
 		"idx": best,
@@ -199,6 +184,103 @@ func step() -> Dictionary:
 		"idx": best,
 		"gid": out[best],
 	}
+
+
+func _undo_open_collapse(idx: int, prev_domain: PackedByteArray, prev_count: int) -> void:
+	done[idx] = 0
+	out[idx] = 0
+	domains[idx] = prev_domain
+	domain_counts[idx] = prev_count
+
+
+func _handle_collapse_failure(
+	idx: int,
+	prev_domain: PackedByteArray,
+	prev_count: int,
+	picked_idx: int,
+) -> Dictionary:
+	_undo_open_collapse(idx, prev_domain, prev_count)
+	_record_tried(idx, picked_idx)
+	if not _wfc().repropagate(
+		domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
+	):
+		return _handle_skip(idx)
+	return _handle_failure_after_tried(idx, prev_domain)
+
+
+func _handle_failure_after_tried(idx: int, prev_domain: PackedByteArray) -> Dictionary:
+	var tried: Array = tried_picks.get(idx, [])
+	var remaining: int = _wfc().untried_domain_count(prev_domain, tried)
+	#region agent log
+	if remaining <= 0 or attempt <= 2:
+		GenDebugLog.write(
+			"H5",
+			"wfc_job.gd:step",
+			"propagate_fail",
+			{
+				"attempt": attempt,
+				"cell": idx,
+				"domain_size": prev_domain.size(),
+				"tried": tried.size(),
+				"remaining": remaining,
+			},
+		)
+	#endregion
+	if remaining > 0:
+		_retry_cell = idx
+		return {"finished": false, "retry": true, "idx": idx}
+	if _try_backtrack(idx):
+		return {"finished": false, "backtrack": true, "idx": _retry_cell}
+	return _handle_skip(idx)
+
+
+func _handle_skip(idx: int) -> Dictionary:
+	if _wfc()._touches_done(idx, done, w, h) and _try_backtrack(idx):
+		return {"finished": false, "backtrack": true, "idx": _retry_cell}
+	return _skip_cell(idx)
+
+
+func _try_backtrack(retry_idx: int) -> bool:
+	if not _backtrack_budget_ok():
+		return false
+	if collapse_stack.is_empty():
+		return false
+
+	backtracks_used += 1
+	var depth_limit: int = backtrack_depth
+	var target_idx := retry_idx
+	var pops := 0
+
+	while pops < depth_limit and not collapse_stack.is_empty():
+		var entry: Dictionary = collapse_stack.pop_back()
+		pops += 1
+		_backtrack_pops += 1
+		_exhausted_cells.erase(int(entry.idx))
+		if entry.has("tile_idx"):
+			_record_tried(int(entry.idx), int(entry.tile_idx))
+		target_idx = int(entry.idx)
+		if constraints.modes[target_idx] == GenConstraints.Mode.GENERATE:
+			break
+
+	if pops <= 0:
+		return false
+
+	if not _wfc().repropagate(
+		domains, domain_counts, done, out, constraints, w, h, ctx, collapse_stack
+	):
+		return false
+
+	_exhausted_cells.clear()
+	_retry_cell = target_idx
+	return true
+
+
+func _backtrack_budget_ok() -> bool:
+	if backtracks_used >= int(options.get("backtrack_incidents", 64)):
+		return false
+	if _backtrack_pops >= int(options.get("backtrack_cells", 128)):
+		return false
+	return true
 
 
 func _skip_cell(idx: int) -> Dictionary:
@@ -235,7 +317,7 @@ func _finish_now(ok: bool, was_cancelled: bool, reason: String = "") -> Dictiona
 	gids.resize(n)
 	for i in n:
 		gids[i] = out[i]
-	var filled: Dictionary = GenWfc._count_filled(gids, constraints)
+	var filled: Dictionary = _wfc()._count_filled(gids, constraints)
 	var method := "wfc"
 	if filled.done < filled.generatable:
 		method = "wfc_partial"
@@ -279,6 +361,7 @@ func _start_attempt() -> void:
 	collapse_stack.clear()
 	tried_picks.clear()
 	backtracks_used = 0
+	_backtrack_pops = 0
 	_retry_cell = -1
 	_exhausted_cells.clear()
 
@@ -327,7 +410,7 @@ func _start_attempt() -> void:
 					done[i] = 1
 					out[i] = seed_gid
 				else:
-					domains[i] = GenWfc._domain_copy(all_domain)
+					domains[i] = _wfc()._domain_copy(all_domain)
 					domain_counts[i] = count
 					done[i] = 0
 
@@ -339,7 +422,7 @@ func _start_attempt() -> void:
 	var repaired := 0
 	if not seeds.is_empty():
 		init_mode = "propagate"
-		if not GenWfc._propagate(
+		if not _wfc()._propagate(
 			seeds, domains, domain_counts, done, out, constraints, w, h, ctx
 		):
 			init_mode = "propagate_repaired"
@@ -347,7 +430,7 @@ func _start_attempt() -> void:
 			if done[i]:
 				continue
 			if domain_counts[i] == 0:
-				domains[i] = GenWfc._domain_copy(all_domain)
+				domains[i] = _wfc()._domain_copy(all_domain)
 				domain_counts[i] = count
 				repaired += 1
 	ready = true
