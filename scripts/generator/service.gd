@@ -17,6 +17,7 @@ static func default_options() -> Dictionary:
 		"backtrack_depth": 5,
 		"backtrack_incidents": 20,
 		"backtrack_cells": 50,
+		"max_restarts": 2,
 	}
 
 

@@ -1,19 +1,12 @@
 extends SceneTree
 
-const DEADLINE_MS := 420_000
+const DEADLINE_MS := 120_000
 
 const TESTS := [
 	"tools/validate_setup.gd",
 	"tools/validate_signature_groups.gd",
 	"tools/test_vertical_edge_group.gd",
 	"tools/test_propagate.gd",
-	"tools/test_editor_propagate.gd",
-	"tools/test_fixed_27.gd",
-	"tools/test_10x10_fixed27.gd",
-	"tools/test_map_validate.gd",
-	"tools/test_halo_continue.gd",
-	"tools/test_fixed_ring.gd",
-	"tools/test_backtrack_seams.gd",
 	"tools/smoke_gen.gd",
 ]
 

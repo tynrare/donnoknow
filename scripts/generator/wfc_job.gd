@@ -129,7 +129,6 @@ func step() -> Dictionary:
 		w,
 		h,
 		exclude,
-		_last_collapsed,
 		constraints,
 		ctx,
 	)

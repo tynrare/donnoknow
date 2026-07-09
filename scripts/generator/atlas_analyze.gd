@@ -127,20 +127,54 @@ static func remap_gid_for_analyze(rules: Dictionary, gid: int) -> int:
 	return gid
 
 
+static func opposing_edges_match(edges_a: Dictionary, edges_b: Dictionary, dir_a: String) -> bool:
+	var dir_b: String = str(OPPOSITE.get(dir_a, ""))
+	if dir_b.is_empty():
+		return false
+	return str(edges_a.get(dir_a, "")) == str(edges_b.get(dir_b, ""))
+
+
+static func tiles_equal(desc_a: Dictionary, desc_b: Dictionary) -> bool:
+	if desc_a.is_empty() or desc_b.is_empty():
+		return false
+	return _cells_equal(desc_a.get("cells", []), desc_b.get("cells", []))
+
+
+static func tile_edges_index(descs: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for gid_key in descs:
+		var desc: Variant = descs[gid_key]
+		if desc is Dictionary and desc.has("edges"):
+			out[str(gid_key)] = desc.edges
+	return out
+
+
 static func _edges_from_cells(cells: Array, grid: int) -> Dictionary:
-	if grid == 2:
-		return {
-			"north": _rgb_key(cells[0]),
-			"east": _rgb_key(cells[1]),
-			"south": _rgb_key(cells[2]),
-			"west": _rgb_key(cells[0]),
-		}
+	var north_idx: Array = []
+	var south_idx: Array = []
+	var east_idx: Array = []
+	var west_idx: Array = []
+	for x in grid:
+		north_idx.append(x)
+		south_idx.append((grid - 1) * grid + x)
+	for y in grid:
+		west_idx.append(y * grid)
+		east_idx.append(y * grid + (grid - 1))
 	return {
-		"north": _rgb_key(cells[0]),
-		"east": _rgb_key(cells[grid - 1]),
-		"south": _rgb_key(cells[(grid - 1) * grid]),
-		"west": _rgb_key(cells[0]),
+		"north": _cells_edge_key(cells, north_idx),
+		"east": _cells_edge_key(cells, east_idx),
+		"south": _cells_edge_key(cells, south_idx),
+		"west": _cells_edge_key(cells, west_idx),
 	}
+
+
+static func _cells_edge_key(cells: Array, indices: Array) -> String:
+	var parts: PackedStringArray = PackedStringArray()
+	for i in indices:
+		if i < 0 or i >= cells.size():
+			continue
+		parts.append(_rgb_key(cells[i]))
+	return "|".join(parts)
 
 
 static func _build_sig_adjacency_from_descs(
@@ -166,7 +200,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid: int = first_gid + north_local
 			if descs.has(str(nb_gid)):
 				var nb: Dictionary = descs[str(nb_gid)]
-				if str(edges.north) == str(nb.edges.south):
+				if opposing_edges_match(edges, nb.edges, "north"):
 					var sig_b: String = str(nb.sig)
 					if not sig_b.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b, "north")
@@ -176,7 +210,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_s: int = first_gid + south_local
 			if descs.has(str(nb_gid_s)):
 				var nb_s: Dictionary = descs[str(nb_gid_s)]
-				if str(edges.south) == str(nb_s.edges.north):
+				if opposing_edges_match(edges, nb_s.edges, "south"):
 					var sig_b2: String = str(nb_s.sig)
 					if not sig_b2.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b2, "south")
@@ -187,7 +221,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_e: int = first_gid + east_local
 			if descs.has(str(nb_gid_e)):
 				var nb_e: Dictionary = descs[str(nb_gid_e)]
-				if str(edges.east) == str(nb_e.edges.west):
+				if opposing_edges_match(edges, nb_e.edges, "east"):
 					var sig_b3: String = str(nb_e.sig)
 					if not sig_b3.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b3, "east")
@@ -197,7 +231,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_w: int = first_gid + west_local
 			if descs.has(str(nb_gid_w)):
 				var nb_w: Dictionary = descs[str(nb_gid_w)]
-				if str(edges.west) == str(nb_w.edges.east):
+				if opposing_edges_match(edges, nb_w.edges, "west"):
 					var sig_b4: String = str(nb_w.sig)
 					if not sig_b4.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
@@ -223,7 +257,7 @@ static func apply_same_sig_vertical_adj(
 		if gids.size() < 2:
 			continue
 		var rep_cells: Array = descs[str(gids[0])].cells
-		# Only alias/interchange when every member shares the same full 2x2 tile.
+		# Equal full tile => equal edges; no separate edge check needed.
 		var all_same_full := true
 		for gid in gids:
 			if not _cells_equal(descs[str(gid)].cells, rep_cells):

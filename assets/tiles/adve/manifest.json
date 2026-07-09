@@ -15,7 +15,7 @@
 		"tileset_edges": true,
 		"tileset_edges_weight": 0.15,
 		"min_generatable_count": 2,
-		"min_context_count": 3,
+		"min_context_count": 2,
 		"min_pattern_count": 2,
 		"trim_self_adj": true
 	},

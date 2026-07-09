@@ -53,6 +53,9 @@ static func analyze_maps(
 	var gid_to_sig: Dictionary = atlas_result.get("gid_to_sig", {})
 	var palette: Array = atlas_result.get("palette", [])
 	var atlas_sig_adj: Dictionary = atlas_result.get("sig_adjacency", {})
+	var tile_edges: Dictionary = GenAtlasAnalyze.tile_edges_index(
+		atlas_result.get("tile_descs", {})
+	)
 	var bg_gid: int = int(manifest.get("background_gid", 1))
 	var bg_sig: String = str(gid_to_sig.get(str(bg_gid), ""))
 
@@ -113,6 +116,7 @@ static func analyze_maps(
 	var adjacency: Dictionary = {}
 	if use_maps:
 		adjacency = _clone_adjacency(map_adjacency)
+		_filter_gid_adjacency_by_edges(adjacency, tile_edges)
 		if analyze.get("trim_self_adj", true):
 			_trim_self_adjacency(adjacency, bg_gid)
 
@@ -151,6 +155,7 @@ static func analyze_maps(
 		"sig_adjacency": sig_adjacency,
 		"signatures": signatures,
 		"gid_to_sig": gid_to_sig,
+		"tile_edges": tile_edges,
 		"generatable_members": generatable_members,
 		"palette": palette,
 		"background_gid": bg_gid,
@@ -290,33 +295,20 @@ static func class_mates(rules: Dictionary, gid: int) -> Array:
 	return members
 
 
-static func pick_member_gid(rules: Dictionary, gid: int, rng: RandomNumberGenerator) -> int:
-	var sig: String = GenAtlasAnalyze.sig_for_gid(rules, gid)
-	if sig.is_empty():
-		return gid
-	var bg_sig: String = str(rules.get("background_sig", ""))
-	var bg_gid: int = int(rules.get("background_gid", 0))
-	if sig == bg_sig and bg_gid > 0:
-		return bg_gid
-	var members: Array = GenAtlasAnalyze.generatable_members(rules, sig)
-	if members.is_empty():
-		return gid
-	if members.size() == 1:
-		return int(members[0])
-	var total := 0.0
-	var weights: Array = []
-	for member in members:
-		var w: float = pick_weight(rules, int(member))
-		weights.append(w)
-		total += w
-	if total <= 0.0:
-		return int(members[rng.randi_range(0, members.size() - 1)])
-	var roll := rng.randf() * total
-	for i in members.size():
-		roll -= float(weights[i])
-		if roll <= 0.0:
-			return int(members[i])
-	return int(members.back())
+static func pick_member_gid(rules: Dictionary, gid: int, _rng: RandomNumberGenerator) -> int:
+	return resolve_generatable_gid(rules, gid, _rng)
+
+
+static func _best_weighted_member(rules: Dictionary, pool: Array) -> int:
+	var best_gid := int(pool[0])
+	var best_w := pick_weight(rules, best_gid)
+	for i in range(1, pool.size()):
+		var mg: int = int(pool[i])
+		var w: float = pick_weight(rules, mg)
+		if w > best_w or (is_equal_approx(w, best_w) and mg < best_gid):
+			best_w = w
+			best_gid = mg
+	return best_gid
 
 
 static func representative_gid(rules: Dictionary, gid: int) -> int:
@@ -332,7 +324,7 @@ static func representative_gid(rules: Dictionary, gid: int) -> int:
 static func resolve_generatable_gid(
 	rules: Dictionary,
 	gid: int,
-	rng: RandomNumberGenerator,
+	_rng: RandomNumberGenerator,
 	allowed: Dictionary = {},
 ) -> int:
 	var sig: String = GenAtlasAnalyze.sig_for_gid(rules, gid)
@@ -354,20 +346,7 @@ static func resolve_generatable_gid(
 		return gid
 	if pool.size() == 1:
 		return int(pool[0])
-	var total := 0.0
-	var weights: Array = []
-	for member in pool:
-		var w: float = pick_weight(rules, int(member))
-		weights.append(w)
-		total += w
-	if total <= 0.0:
-		return int(pool[rng.randi_range(0, pool.size() - 1)])
-	var roll := rng.randf() * total
-	for i in pool.size():
-		roll -= float(weights[i])
-		if roll <= 0.0:
-			return int(pool[i])
-	return int(pool.back())
+	return _best_weighted_member(rules, pool)
 
 
 static func tile_weight(rules: Dictionary, gid: int) -> float:
@@ -381,6 +360,13 @@ static func pick_weight(rules: Dictionary, gid: int) -> float:
 	return maxf(base, 0.0001)
 
 
+static func _mate_pick_prob(rules: Dictionary, bucket: Dictionary, gid: int) -> float:
+	var best := 0.0
+	for mate in class_mates(rules, gid):
+		best = maxf(best, float(bucket.get(str(int(mate)), 0.0)))
+	return best
+
+
 static func context_pick_factor(rules: Dictionary, ctx_key: String, gid: int) -> float:
 	var buckets: Dictionary = rules.get("context_weights", {})
 	if not buckets.has(ctx_key):
@@ -388,10 +374,26 @@ static func context_pick_factor(rules: Dictionary, ctx_key: String, gid: int) ->
 	var bucket: Variant = buckets[ctx_key]
 	if bucket is not Dictionary:
 		return 1.0
-	var prob: float = float(bucket.get(str(gid), 0.0))
+	var prob: float = _mate_pick_prob(rules, bucket, gid)
 	if prob <= 0.0:
 		return 0.05
 	return maxf(prob, 0.0001)
+
+
+static func _neighbor_context_bucket(
+	rules: Dictionary,
+	by_dir: Dictionary,
+	neighbor_gid: int,
+) -> Dictionary:
+	var merged := {}
+	for mate in class_mates(rules, neighbor_gid):
+		var sub: Variant = by_dir.get(str(int(mate)))
+		if sub is not Dictionary:
+			continue
+		for gid_key in sub:
+			var prob: float = float(sub[gid_key])
+			merged[gid_key] = maxf(float(merged.get(gid_key, 0.0)), prob)
+	return merged
 
 
 static func dir_context_pick_factor(
@@ -403,50 +405,50 @@ static func dir_context_pick_factor(
 	var dirs: Dictionary = rules.get("dir_context_weights", {})
 	if not dirs.has(dir):
 		return 1.0
-	var by_neighbor: Variant = dirs[dir].get(str(neighbor_gid))
-	if by_neighbor is not Dictionary:
+	var by_dir: Variant = dirs[dir]
+	if by_dir is not Dictionary:
 		return 1.0
-	var prob: float = float(by_neighbor.get(str(gid), 0.0))
+	var bucket: Dictionary = _neighbor_context_bucket(rules, by_dir, neighbor_gid)
+	if bucket.is_empty():
+		return 1.0
+	var prob: float = _mate_pick_prob(rules, bucket, gid)
 	if prob <= 0.0:
 		return 0.05
 	return maxf(prob, 0.0001)
 
 
-static func pattern_pick_factor(
+static func opposing_edges_compatible(
 	rules: Dictionary,
-	partial: PackedInt32Array,
-	center_gid: int,
-) -> float:
-	var by_center: Variant = rules.get("patterns_3x3", {}).get(str(center_gid))
-	if by_center is not Dictionary or by_center.is_empty():
-		return 1.0
-	var best := 0.0
-	for pattern_key in by_center:
-		var prob: float = float(by_center[pattern_key])
-		var score: float = _partial_pattern_score(partial, pattern_key)
-		if score > 0.0:
-			best = maxf(best, score * prob)
-	if best <= 0.0:
-		return 1.0
-	return maxf(best, 0.05)
+	gid_a: int,
+	dir: String,
+	gid_b: int,
+) -> bool:
+	var tile_edges: Dictionary = rules.get("tile_edges", {})
+	var edges_a: Variant = tile_edges.get(str(gid_a))
+	var edges_b: Variant = tile_edges.get(str(gid_b))
+	if edges_a is not Dictionary or edges_b is not Dictionary:
+		return true
+	return GenAtlasAnalyze.opposing_edges_match(edges_a, edges_b, dir)
 
 
-static func _partial_pattern_score(partial: PackedInt32Array, pattern_key: String) -> float:
-	var parts: PackedStringArray = pattern_key.split("|")
-	if parts.size() != partial.size():
-		return 0.0
-	var known := 0
-	var matches := 0
-	for i in partial.size():
-		var p: int = partial[i]
-		if p < 0:
-			continue
-		known += 1
-		if int(parts[i]) == p:
-			matches += 1
-	if known == 0:
-		return 0.0
-	return float(matches) / float(known)
+static func _filter_gid_adjacency_by_edges(
+	adjacency: Dictionary,
+	tile_edges: Dictionary,
+) -> void:
+	if tile_edges.is_empty():
+		return
+	for gid_key in adjacency:
+		for d in DIRS:
+			var bucket: Variant = adjacency[gid_key].get(d, {})
+			if bucket is not Dictionary:
+				continue
+			for nb_key in bucket.keys():
+				if not GenAtlasAnalyze.opposing_edges_match(
+					tile_edges.get(str(gid_key), {}),
+					tile_edges.get(str(nb_key), {}),
+					d
+				):
+					bucket.erase(nb_key)
 
 
 static func _clone_adjacency(src: Dictionary) -> Dictionary:

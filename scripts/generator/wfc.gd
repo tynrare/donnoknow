@@ -12,20 +12,39 @@ static func generate(
 	manifest: Dictionary = {},
 	options: Dictionary = {},
 ) -> Dictionary:
-	var job = GenWfcJob.new(rules, constraints, manifest, seed, options)
-	while not job.finished:
-		var step: Dictionary = job.step()
-		if step.get("finished", false):
-			return _finalize_result(step, rules, constraints, seed, manifest, options)
+	var max_restarts: int = maxi(int(options.get("max_restarts", 2)), 1)
+	var last_step: Dictionary = {"ok": false, "gids": PackedInt32Array(), "seed": seed}
+	for attempt in max_restarts:
+		var attempt_seed: int = seed + attempt
+		var job = GenWfcJob.new(rules, constraints, manifest, attempt_seed, options)
+		while not job.finished:
+			var step: Dictionary = job.step()
+			if step.get("finished", false):
+				last_step = step
+				break
+		if _attempt_acceptable(last_step):
+			last_step["seed"] = attempt_seed
+			last_step["attempts"] = attempt + 1
+			return _finalize_result(
+				last_step, rules, constraints, attempt_seed, manifest, options
+			)
 
-	return _finalize_result(
-		{"ok": false, "gids": job.out, "seed": seed},
-		rules,
-		constraints,
-		seed,
-		manifest,
-		options,
-	)
+	last_step["attempts"] = max_restarts
+	return _finalize_result(last_step, rules, constraints, seed, manifest, options)
+
+
+static func _attempt_acceptable(step: Dictionary) -> bool:
+	if step.get("cancelled", false):
+		return true
+	if not step.get("ok", false):
+		return false
+	var filled: int = int(step.get("filled", 0))
+	var total: int = int(step.get("total", 0))
+	if total > 0 and filled < total:
+		return false
+	if int(step.get("bad_adj", 0)) > 0:
+		return false
+	return true
 
 
 static func _finalize_result(
@@ -52,8 +71,11 @@ static func _finalize_result(
 		"ok": filled.done > 0 or filled.done == filled.generatable or filled.generatable == 0,
 		"gids": gids,
 		"seed": int(step.get("seed", seed)),
+		"attempts": int(step.get("attempts", 1)),
 		"method": method,
 		"filled": filled.done,
 		"total": filled.generatable,
+		"bad_adj": int(step.get("bad_adj", 0)),
+		"backtracks": int(step.get("backtracks", 0)),
 		"error": step.get("error", ""),
 	}

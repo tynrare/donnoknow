@@ -58,7 +58,10 @@ func _check_atlas_vertical_edges(descs: Dictionary) -> void:
 				% [upper, south, lower, north]
 			)
 			quit(1)
-		print("  atlas %d south == %d north (%s)" % [upper, lower, south])
+		if not GenAtlasAnalyze.cells_equal(du.cells, dl.cells):
+			push_error("FAIL atlas vertical group gid %d and %d differ in full tile" % [upper, lower])
+			quit(1)
+		print("  atlas %d south == %d north (%s), tiles equal" % [upper, lower, south])
 
 
 func _check_rules_vertical_adjacency(rules: Dictionary) -> void:

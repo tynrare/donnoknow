@@ -404,29 +404,27 @@ static func _heap_pop(heap: Array) -> Array:
 	return top
 
 
-static func _build_partial_3x3(
+static func _context_pick_key_at(
 	out: PackedInt32Array,
 	done: PackedByteArray,
 	idx: int,
 	w: int,
 	h: int,
-) -> PackedInt32Array:
-	var cx := idx % w
-	var cy := idx / w
-	var partial := PackedInt32Array()
-	partial.resize(9)
-	partial.fill(-1)
-	for dy in 3:
-		for dx in 3:
-			var x: int = cx + dx - 1
-			var y: int = cy + dy - 1
-			var slot: int = dy * 3 + dx
-			if x < 0 or y < 0 or x >= w or y >= h:
-				continue
-			var ni: int = y * w + x
-			if done[ni] and out[ni] > 0:
-				partial[slot] = out[ni]
-	return partial
+) -> String:
+	var x := idx % w
+	var y := idx / w
+	var parts: PackedStringArray = PackedStringArray()
+	for d in 4:
+		var np: Vector2i = Vector2i(x, y) + DELTA[d]
+		if np.x < 0 or np.y < 0 or np.x >= w or np.y >= h:
+			parts.append("0")
+			continue
+		var ni: int = np.y * w + np.x
+		if done[ni] == 0 or out[ni] <= 0:
+			parts.append("0")
+		else:
+			parts.append(str(out[ni]))
+	return "|".join(parts)
 
 
 static func _touches_done(idx: int, done: PackedByteArray, w: int, h: int) -> bool:
@@ -1267,35 +1265,6 @@ static func _directional_context_factor(
 	return exp(log_sum / float(n))
 
 
-static func _local_repeat_factor(
-	idx: int,
-	gid: int,
-	out: PackedInt32Array,
-	done: PackedByteArray,
-	w: int,
-	h: int,
-	last_idx: int,
-) -> float:
-	var factor := 1.0
-	if last_idx >= 0 and out[last_idx] == gid:
-		factor *= 0.3
-	var x := idx % w
-	var y := idx / w
-	var same_cardinal := 0
-	for d in 4:
-		var np: Vector2i = Vector2i(x, y) + DELTA[d]
-		if np.x < 0 or np.y < 0 or np.x >= w or np.y >= h:
-			continue
-		var ni: int = np.y * w + np.x
-		if done[ni] and out[ni] == gid:
-			same_cardinal += 1
-	if same_cardinal >= 2:
-		factor *= 0.15
-	elif same_cardinal == 1:
-		factor *= 0.5
-	return factor
-
-
 static func _adj_pick_boost(
 	rules: Dictionary,
 	out: PackedInt32Array,
@@ -1340,15 +1309,6 @@ static func _anchor_gid_penalty(
 	return 1.0
 
 
-static func _background_penalty(rules: Dictionary, gid: int, option_count: int) -> float:
-	if option_count < 2:
-		return 1.0
-	var bg: int = int(rules.get("sources", {}).get("background_gid", 1))
-	if bg > 0 and gid == bg:
-		return 0.08 if option_count >= 3 else 0.25
-	return 1.0
-
-
 static func _weighted_pick_idx(
 	rules: Dictionary,
 	domain: PackedByteArray,
@@ -1360,7 +1320,6 @@ static func _weighted_pick_idx(
 	w: int,
 	h: int,
 	exclude: Array = [],
-	last_idx: int = -1,
 	constraints: Dictionary = {},
 	ctx: Dictionary = {},
 ) -> int:
@@ -1389,20 +1348,7 @@ static func _weighted_pick_idx(
 	if filtered.is_empty():
 		return -1
 
-	var ctx_key: String = ""
-	var all_neighbors_done := true
-	var x := idx % w
-	var y := idx / w
-	for d in 4:
-		var np: Vector2i = Vector2i(x, y) + DELTA[d]
-		if np.x < 0 or np.y < 0 or np.x >= w or np.y >= h:
-			continue
-		var ni: int = np.y * w + np.x
-		if done[ni] == 0 or out[ni] <= 0:
-			all_neighbors_done = false
-			break
-
-	var partial_3x3 := _build_partial_3x3(out, done, idx, w, h)
+	var ctx_key: String = _context_pick_key_at(out, done, idx, w, h)
 
 	var total := 0.0
 	var weights: Array = []
@@ -1410,23 +1356,9 @@ static func _weighted_pick_idx(
 		var gid: int = idx_to_gid[option_idx]
 		var weight: float = GenRules.pick_weight(rules, gid)
 		weight *= _directional_context_factor(rules, out, done, idx, w, h, gid)
-		weight *= GenRules.pattern_pick_factor(rules, partial_3x3, gid)
-		weight *= _local_repeat_factor(idx, gid, out, done, w, h, last_idx)
 		weight *= _adj_pick_boost(rules, out, done, idx, w, h, gid)
 		weight *= _anchor_gid_penalty(constraints, idx, gid)
-		weight *= _background_penalty(rules, gid, filtered.size())
-		weight *= 0.8 + rng.randf() * 0.4
-		if all_neighbors_done:
-			if ctx_key.is_empty():
-				var parts: PackedStringArray = PackedStringArray()
-				for d2 in 4:
-					var np2: Vector2i = Vector2i(x, y) + DELTA[d2]
-					if np2.x < 0 or np2.y < 0 or np2.x >= w or np2.y >= h:
-						parts.append("0")
-					else:
-						parts.append(str(out[np2.y * w + np2.x]))
-				ctx_key = "|".join(parts)
-			weight *= GenRules.context_pick_factor(rules, ctx_key, gid)
+		weight *= GenRules.context_pick_factor(rules, ctx_key, gid)
 		weights.append(weight)
 		total += weight
 
