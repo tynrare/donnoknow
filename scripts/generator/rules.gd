@@ -36,7 +36,9 @@ static func analyze_maps(
 	var min_pattern: int = maxi(int(analyze.get("min_pattern_count", 2)), 2)
 	var context_weights_raw: Dictionary = {}
 	var dir_context_weights_raw: Dictionary = {}
-	var patterns_3x3_raw: Dictionary = {}
+	var patterns_list: Array = []
+	var pattern_counts: Dictionary = {}
+	var patterns_pick_raw: Dictionary = {}
 	var sources := {
 		"maps": use_maps,
 		"tileset_edges": use_tileset_edges,
@@ -66,7 +68,7 @@ static func analyze_maps(
 				continue
 			_scan_map(map, tile_counts, map_adjacency, manifest, gid_to_sig, bg_gid, bg_sig)
 			_scan_context(map, context_weights_raw, dir_context_weights_raw, manifest)
-			_scan_patterns_3x3(map, patterns_3x3_raw, manifest)
+			_scan_patterns_3x3(map, patterns_list, pattern_counts, patterns_pick_raw, manifest)
 			total += map.width * map.height
 
 	var sig_counts: Dictionary = {}
@@ -140,7 +142,7 @@ static func analyze_maps(
 	var dir_context_weights := _normalize_dir_context_weights(
 		dir_context_weights_raw, min_context
 	)
-	var patterns_3x3 := _normalize_patterns_3x3(patterns_3x3_raw, min_pattern)
+	var patterns_pick := _normalize_patterns_pick(patterns_pick_raw, min_pattern)
 
 	return {
 		"version": 8,
@@ -150,7 +152,9 @@ static func analyze_maps(
 		"map_tile_counts": map_tile_counts,
 		"context_weights": context_weights,
 		"dir_context_weights": dir_context_weights,
-		"patterns_3x3": patterns_3x3,
+		"patterns_3x3": patterns_list,
+		"pattern_counts": pattern_counts,
+		"patterns_pick": patterns_pick,
 		"adjacency": adjacency,
 		"sig_adjacency": sig_adjacency,
 		"signatures": signatures,
@@ -176,7 +180,8 @@ static func analyze_maps(
 			"unique_signatures": signatures.size(),
 			"context_keys": context_weights.size(),
 			"dir_context_buckets": _dir_context_bucket_count(dir_context_weights),
-			"pattern_centers": patterns_3x3.size(),
+			"pattern_centers": patterns_pick.size(),
+			"patterns_3x3": patterns_list.size(),
 			"generatable_signatures": generatable_members.size(),
 			"max_adj_mates": max_adj_mates,
 		},
@@ -324,7 +329,7 @@ static func representative_gid(rules: Dictionary, gid: int) -> int:
 static func resolve_generatable_gid(
 	rules: Dictionary,
 	gid: int,
-	_rng: RandomNumberGenerator,
+	rng: RandomNumberGenerator,
 	allowed: Dictionary = {},
 ) -> int:
 	var sig: String = GenAtlasAnalyze.sig_for_gid(rules, gid)
@@ -346,7 +351,113 @@ static func resolve_generatable_gid(
 		return gid
 	if pool.size() == 1:
 		return int(pool[0])
-	return _best_weighted_member(rules, pool)
+	var total := 0.0
+	var weights: Array = []
+	for member in pool:
+		var w: float = pick_weight(rules, int(member))
+		weights.append(w)
+		total += w
+	if total <= 0.0:
+		return int(pool[rng.randi_range(0, pool.size() - 1)])
+	var roll := rng.randf() * total
+	for i in pool.size():
+		roll -= float(weights[i])
+		if roll <= 0.0:
+			return int(pool[i])
+	return int(pool.back())
+
+
+static func patterns_3x3_list(rules: Dictionary) -> Array:
+	var raw: Variant = rules.get("patterns_3x3", [])
+	return raw if raw is Array else []
+
+
+static func build_pattern_index(patterns: Array, pattern_counts: Dictionary = {}) -> Dictionary:
+	var index := {}
+	for pat_v in patterns:
+		var pat: PackedInt32Array = _coerce_pattern(pat_v)
+		if pat.size() != 9:
+			continue
+		var freq: float = 1.0
+		var key := _pattern_key(pat)
+		if pattern_counts.has(key):
+			freq = float(pattern_counts[key])
+		var neighbor_mask := 0
+		for i in 9:
+			if i != 4 and pat[i] > 0:
+				neighbor_mask |= 1 << i
+		var mask: int = neighbor_mask
+		while mask > 0:
+			var partial_key := _partial_pattern_key(pat, mask)
+			if not index.has(partial_key):
+				index[partial_key] = {}
+			var center: int = pat[4]
+			index[partial_key][center] = index[partial_key].get(center, 0.0) + freq
+			mask = (mask - 1) & neighbor_mask
+	return index
+
+
+static func pattern_center_allowed(rules: Dictionary, gid: int, allowed_map: Dictionary) -> bool:
+	if allowed_map.has(gid):
+		return true
+	for mate in class_mates(rules, gid):
+		if allowed_map.has(int(mate)):
+			return true
+	return false
+
+
+static func pattern_pick_factor(
+	rules: Dictionary,
+	partial: PackedInt32Array,
+	center_gid: int,
+) -> float:
+	var pick_data: Variant = rules.get("patterns_pick", {})
+	if pick_data is not Dictionary or pick_data.is_empty():
+		pick_data = rules.get("patterns_3x3", {})
+	if pick_data is not Dictionary:
+		return 1.0
+	var by_center: Variant = pick_data.get(str(center_gid))
+	if by_center is not Dictionary or by_center.is_empty():
+		return 1.0
+	var best := 0.0
+	for pattern_key in by_center:
+		var prob: float = float(by_center[pattern_key])
+		var score: float = _partial_pattern_score(partial, pattern_key)
+		if score > 0.0:
+			best = maxf(best, score * prob)
+	if best <= 0.0:
+		return 1.0
+	return maxf(best, 0.05)
+
+
+static func _partial_pattern_score(partial: PackedInt32Array, pattern_key: String) -> float:
+	var parts: PackedStringArray = pattern_key.split("|")
+	if parts.size() != partial.size():
+		return 0.0
+	var known := 0
+	var matches := 0
+	for i in partial.size():
+		var p: int = partial[i]
+		if p < 0:
+			continue
+		known += 1
+		if int(parts[i]) == p:
+			matches += 1
+	if known == 0:
+		return 0.0
+	return float(matches) / float(known)
+
+
+static func context_weight_boosted(
+	rules: Dictionary,
+	ctx_key: String,
+	gid: int,
+	boost: float,
+) -> float:
+	var factor: float = context_pick_factor(rules, ctx_key, gid)
+	if is_equal_approx(factor, 1.0):
+		return 1.0
+	return maxf(factor * maxf(boost, 1.0), 0.0001)
 
 
 static func tile_weight(rules: Dictionary, gid: int) -> float:
@@ -513,32 +624,47 @@ static func _scan_context(
 
 static func _scan_patterns_3x3(
 	map: Dictionary,
-	patterns: Dictionary,
+	patterns: Array,
+	pattern_counts: Dictionary,
+	patterns_pick: Dictionary,
 	manifest: Dictionary,
 ) -> void:
 	var w: int = map.width
 	var h: int = map.height
 	var gids: PackedInt32Array = map.gids
-	for y in h:
-		for x in w:
-			var parts: PackedStringArray = PackedStringArray()
-			parts.resize(9)
+	var seen := {}
+
+	for y in h - 2:
+		for x in w - 2:
+			var pat := PackedInt32Array()
+			pat.resize(9)
+			var valid := true
 			for dy in 3:
 				for dx in 3:
-					var px: int = x + dx - 1
-					var py: int = y + dy - 1
-					var slot: int = dy * 3 + dx
-					if px < 0 or py < 0 or px >= w or py >= h:
-						parts[slot] = "0"
-					else:
-						parts[slot] = str(_cell_gid(gids[py * w + px], manifest))
-			var center_gid: int = int(parts[4])
-			if center_gid <= 0:
+					var gid := _cell_gid(gids[(y + dy) * w + (x + dx)], manifest)
+					if gid <= 0:
+						valid = false
+						break
+					pat[dy * 3 + dx] = gid
+				if not valid:
+					break
+			if not valid:
 				continue
-			var key := "|".join(parts)
-			if not patterns.has(key):
-				patterns[key] = 0
-			patterns[key] = int(patterns[key]) + 1
+			var key := _pattern_key(pat)
+			pattern_counts[key] = int(pattern_counts.get(key, 0)) + 1
+			var pipe_key := _pattern_pipe_key(pat)
+			var center_s := str(pat[4])
+			if not patterns_pick.has(center_s):
+				patterns_pick[center_s] = {}
+			var bucket: Dictionary = patterns_pick[center_s]
+			bucket[pipe_key] = int(bucket.get(pipe_key, 0)) + 1
+			if seen.has(key):
+				continue
+			seen[key] = true
+			var saved: Array = []
+			for gid in pat:
+				saved.append(gid)
+			patterns.append(saved)
 
 
 static func _context_key_at(
@@ -612,33 +738,59 @@ static func _dir_context_bucket_count(dir_context: Dictionary) -> int:
 	return n
 
 
-static func _normalize_patterns_3x3(raw: Dictionary, min_count: int) -> Dictionary:
-	var by_center: Dictionary = {}
-	for key in raw:
-		var total: int = int(raw[key])
-		if total < min_count:
-			continue
-		var parts: PackedStringArray = key.split("|")
-		if parts.size() != 9:
-			continue
-		var center_s: String = parts[4]
-		if not by_center.has(center_s):
-			by_center[center_s] = {"_total": 0, "_patterns": {}}
-		var bucket: Dictionary = by_center[center_s]
-		bucket["_total"] = int(bucket["_total"]) + total
-		bucket["_patterns"][key] = int(bucket["_patterns"].get(key, 0)) + total
-
+static func _normalize_patterns_pick(raw: Dictionary, min_count: int) -> Dictionary:
 	var out: Dictionary = {}
-	for center_s in by_center:
-		var bucket: Dictionary = by_center[center_s]
-		var center_total: int = int(bucket["_total"])
+	for center_s in raw:
+		var bucket: Variant = raw[center_s]
+		if bucket is not Dictionary:
+			continue
+		var center_total := 0
+		for pattern_key in bucket:
+			center_total += int(bucket[pattern_key])
 		if center_total < min_count:
 			continue
 		var norm: Dictionary = {}
-		for pattern_key in bucket["_patterns"]:
-			norm[pattern_key] = float(bucket["_patterns"][pattern_key]) / float(center_total)
+		for pattern_key in bucket:
+			norm[pattern_key] = float(bucket[pattern_key]) / float(center_total)
 		out[center_s] = norm
 	return out
+
+
+static func _pattern_key(pat: PackedInt32Array) -> String:
+	var parts: Array = []
+	for gid in pat:
+		parts.append(str(gid))
+	return ",".join(parts)
+
+
+static func _pattern_pipe_key(pat: PackedInt32Array) -> String:
+	var parts: Array = []
+	for gid in pat:
+		parts.append(str(gid))
+	return "|".join(parts)
+
+
+static func _partial_pattern_key(pat: PackedInt32Array, mask: int) -> String:
+	var parts: Array = []
+	for i in 9:
+		if i == 4:
+			parts.append("_")
+		elif mask & (1 << i):
+			parts.append(str(pat[i]))
+		else:
+			parts.append("*")
+	return ",".join(parts)
+
+
+static func _coerce_pattern(pat_v: Variant) -> PackedInt32Array:
+	if pat_v is PackedInt32Array:
+		return pat_v
+	if pat_v is Array:
+		var pat := PackedInt32Array()
+		for gid in pat_v:
+			pat.append(int(gid))
+		return pat
+	return PackedInt32Array()
 
 
 static func _merge_edge_gap_fill(

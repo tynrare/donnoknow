@@ -71,7 +71,8 @@ func _init(
 		finished = true
 		return
 
-	ctx = Core._build_context(rules, tiles)
+	ctx = Core._build_context(rules, tiles, options)
+	ctx["rules"] = rules
 	Core._alias_signature_members(rules, ctx)
 	Core._augment_compat_from_constraints(constraints, ctx)
 	_start_attempt()
@@ -118,6 +119,13 @@ func step() -> Dictionary:
 	if Core.untried_domain_count(domains[best], exclude) == 0:
 		return _handle_skip(best)
 
+	if bool(options.get("use_patterns", false)):
+		Core._apply_pattern_filter(
+			domains[best], domain_counts, best, out, done, w, h, ctx
+		)
+		if domain_counts[best] == 0:
+			return _handle_skip(best)
+
 	var picked_idx: int = Core._weighted_pick_idx(
 		rules,
 		domains[best],
@@ -131,6 +139,7 @@ func step() -> Dictionary:
 		exclude,
 		constraints,
 		ctx,
+		options,
 	)
 	if picked_idx < 0:
 		return _handle_skip(best)

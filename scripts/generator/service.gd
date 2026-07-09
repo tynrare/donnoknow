@@ -18,6 +18,12 @@ static func default_options() -> Dictionary:
 		"backtrack_incidents": 20,
 		"backtrack_cells": 50,
 		"max_restarts": 2,
+		"use_pattern_pick": true,
+		"use_patterns": true,
+		"pattern_propagate": false,
+		"background_penalty": true,
+		"pick_jitter": 0.12,
+		"context_boost": 4.0,
 	}
 
 

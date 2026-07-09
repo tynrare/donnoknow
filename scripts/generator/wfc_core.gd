@@ -68,7 +68,10 @@ static func _sync_compat_row_dict(
 static func _build_context(
 	rules: Dictionary,
 	tiles: PackedInt32Array,
+	options: Dictionary = {},
 ) -> Dictionary:
+	var use_patterns: bool = bool(options.get("use_patterns", false))
+	var pattern_propagate: bool = bool(options.get("pattern_propagate", false))
 	var count := tiles.size()
 	var gid_to_idx := {}
 	var idx_to_gid := PackedInt32Array()
@@ -136,6 +139,14 @@ static func _build_context(
 	_rebuild_propagator_fwd(build_ctx)
 	var propagator_fwd: Array = build_ctx["propagator_fwd"]
 
+	var patterns: Array = []
+	var pattern_index: Dictionary = {}
+	if use_patterns:
+		patterns = GenRules.patterns_3x3_list(rules)
+		if not patterns.is_empty():
+			var pattern_counts: Dictionary = rules.get("pattern_counts", {})
+			pattern_index = GenRules.build_pattern_index(patterns, pattern_counts)
+
 	return {
 		"tiles": tiles,
 		"count": count,
@@ -145,6 +156,10 @@ static func _build_context(
 		"compat_dirs": compat_dirs,
 		"propagator_fwd": propagator_fwd,
 		"compat": compat,
+		"use_patterns": use_patterns,
+		"pattern_propagate": pattern_propagate,
+		"patterns": patterns,
+		"pattern_index": pattern_index,
 	}
 
 
@@ -425,6 +440,31 @@ static func _context_pick_key_at(
 		else:
 			parts.append(str(out[ni]))
 	return "|".join(parts)
+
+
+static func _build_partial_3x3(
+	out: PackedInt32Array,
+	done: PackedByteArray,
+	idx: int,
+	w: int,
+	h: int,
+) -> PackedInt32Array:
+	var cx := idx % w
+	var cy := idx / w
+	var partial := PackedInt32Array()
+	partial.resize(9)
+	partial.fill(-1)
+	for dy in 3:
+		for dx in 3:
+			var x: int = cx + dx - 1
+			var y: int = cy + dy - 1
+			var slot: int = dy * 3 + dx
+			if x < 0 or y < 0 or x >= w or y >= h:
+				continue
+			var ni: int = y * w + x
+			if done[ni] and out[ni] > 0:
+				partial[slot] = out[ni]
+	return partial
 
 
 static func _touches_done(idx: int, done: PackedByteArray, w: int, h: int) -> bool:
@@ -1230,7 +1270,132 @@ static func _narrow(
 		domain_counts[dst] = 0
 		return -1
 	domain_counts[dst] = new_count
+
+	if not done[dst] and ctx.get("pattern_propagate", false):
+		if not _apply_pattern_filter(
+			domains[dst], domain_counts, dst, out, done, w, h, ctx
+		):
+			domain_counts[dst] = 0
+			return -1
+		if domain_counts[dst] == 0:
+			return -1
+
 	return 1
+
+
+static func _apply_pattern_filter(
+	domain: PackedByteArray,
+	domain_counts: PackedInt32Array,
+	idx: int,
+	out: PackedInt32Array,
+	done: PackedByteArray,
+	w: int,
+	h: int,
+	ctx: Dictionary,
+) -> bool:
+	var rules: Dictionary = ctx.get("rules", {})
+	var patterns: Array = ctx.get("patterns", [])
+	if not ctx.get("use_patterns", false) or patterns.is_empty():
+		return true
+
+	var x := idx % w
+	var y := idx / w
+	var collapsed := 0
+	for dy in 3:
+		for dx in 3:
+			if dx == 1 and dy == 1:
+				continue
+			var cx: int = x + dx - 1
+			var cy: int = y + dy - 1
+			if cx < 0 or cy < 0 or cx >= w or cy >= h:
+				continue
+			var ni: int = cy * w + cx
+			if done[ni] and out[ni] > 0:
+				collapsed += 1
+
+	if collapsed == 0:
+		return true
+
+	var allowed: Variant = _pattern_allowed_centers(out, done, idx, w, h, ctx)
+	if allowed == null:
+		return true
+
+	var allowed_map: Dictionary = allowed
+	var count: int = ctx.count
+	var idx_to_gid: PackedInt32Array = ctx.idx_to_gid
+	var backup := domain.duplicate()
+	var new_count := 0
+	for t in count:
+		if not domain[t]:
+			continue
+		var gid: int = idx_to_gid[t]
+		if GenRules.pattern_center_allowed(rules, gid, allowed_map):
+			new_count += 1
+		else:
+			domain[t] = 0
+
+	if new_count == 0:
+		for t in count:
+			domain[t] = backup[t]
+		return true
+
+	domain_counts[idx] = new_count
+	return true
+
+
+static func _pattern_allowed_centers(
+	out: PackedInt32Array,
+	done: PackedByteArray,
+	idx: int,
+	w: int,
+	h: int,
+	ctx: Dictionary,
+):
+	var window := PackedInt32Array()
+	window.resize(9)
+	window.fill(0)
+	var x := idx % w
+	var y := idx / w
+	for dy in 3:
+		for dx in 3:
+			var cx: int = x + dx - 1
+			var cy: int = y + dy - 1
+			if cx < 0 or cy < 0 or cx >= w or cy >= h:
+				continue
+			var ni: int = cy * w + cx
+			if done[ni] and out[ni] > 0:
+				window[dy * 3 + dx] = out[ni]
+
+	var index: Dictionary = ctx.get("pattern_index", {})
+	if not index.is_empty():
+		var merged := {}
+		var neighbor_mask := 0
+		for i in 9:
+			if i != 4 and window[i] > 0:
+				neighbor_mask |= 1 << i
+		var mask: int = neighbor_mask
+		while mask > 0:
+			var key := _window_mask_key(window, mask)
+			if index.has(key):
+				for gid in index[key]:
+					merged[gid] = true
+			mask = (mask - 1) & neighbor_mask
+		if not merged.is_empty():
+			return merged
+
+	return null
+
+
+static func _window_mask_key(window: PackedInt32Array, mask: int) -> String:
+	var parts: Array = []
+	for i in 9:
+		if i == 4:
+			parts.append("_")
+		elif mask & (1 << i) and window[i] > 0:
+			parts.append(str(window[i]))
+		else:
+			parts.append("*")
+	return ",".join(parts)
 
 
 static func _directional_context_factor(
@@ -1241,6 +1406,7 @@ static func _directional_context_factor(
 	w: int,
 	h: int,
 	gid: int,
+	boost: float = 1.0,
 ) -> float:
 	var x := idx % w
 	var y := idx / w
@@ -1258,7 +1424,7 @@ static func _directional_context_factor(
 		)
 		if is_equal_approx(factor, 1.0):
 			continue
-		log_sum += log(factor)
+		log_sum += log(maxf(factor * maxf(boost, 1.0), 0.0001))
 		n += 1
 	if n == 0:
 		return 1.0
@@ -1309,6 +1475,23 @@ static func _anchor_gid_penalty(
 	return 1.0
 
 
+static func _background_penalty(rules: Dictionary, gid: int, option_count: int) -> float:
+	if option_count < 2:
+		return 1.0
+	var bg: int = int(rules.get("sources", {}).get("background_gid", 1))
+	if bg <= 0:
+		bg = int(rules.get("background_gid", 1))
+	if bg > 0 and gid == bg:
+		return 0.12 if option_count >= 4 else 0.35
+	return 1.0
+
+
+static func _pick_jitter(rng: RandomNumberGenerator, amount: float) -> float:
+	if amount <= 0.0:
+		return 1.0
+	return 1.0 + (rng.randf() * 2.0 - 1.0) * amount
+
+
 static func _weighted_pick_idx(
 	rules: Dictionary,
 	domain: PackedByteArray,
@@ -1322,9 +1505,10 @@ static func _weighted_pick_idx(
 	exclude: Array = [],
 	constraints: Dictionary = {},
 	ctx: Dictionary = {},
+	options: Dictionary = {},
 ) -> int:
-	var options: Array = _domain_pick_indices(domain)
-	if options.is_empty():
+	var pick_indices: Array = _domain_pick_indices(domain)
+	if pick_indices.is_empty():
 		return 0
 
 	var filtered: Array = []
@@ -1333,7 +1517,7 @@ static func _weighted_pick_idx(
 	if not constraints.is_empty() and constraints.has("paint_anchor"):
 		pa = constraints.paint_anchor
 		paint_only = _adjacent_to_paint_anchor(idx, constraints, done, w, h)
-	for option_idx in options:
+	for option_idx in pick_indices:
 		if exclude.has(option_idx):
 			continue
 		var gid: int = idx_to_gid[option_idx]
@@ -1349,16 +1533,28 @@ static func _weighted_pick_idx(
 		return -1
 
 	var ctx_key: String = _context_pick_key_at(out, done, idx, w, h)
+	var partial_3x3 := _build_partial_3x3(out, done, idx, w, h)
+	var context_boost: float = float(options.get("context_boost", 4.0))
+	var use_pattern_pick: bool = bool(options.get("use_pattern_pick", true))
+	var use_bg_penalty: bool = bool(options.get("background_penalty", true))
+	var pick_jitter: float = float(options.get("pick_jitter", 0.12))
 
 	var total := 0.0
 	var weights: Array = []
 	for option_idx in filtered:
 		var gid: int = idx_to_gid[option_idx]
 		var weight: float = GenRules.pick_weight(rules, gid)
-		weight *= _directional_context_factor(rules, out, done, idx, w, h, gid)
+		weight *= _directional_context_factor(
+			rules, out, done, idx, w, h, gid, context_boost
+		)
+		if use_pattern_pick:
+			weight *= GenRules.pattern_pick_factor(rules, partial_3x3, gid)
 		weight *= _adj_pick_boost(rules, out, done, idx, w, h, gid)
 		weight *= _anchor_gid_penalty(constraints, idx, gid)
-		weight *= GenRules.context_pick_factor(rules, ctx_key, gid)
+		weight *= GenRules.context_weight_boosted(rules, ctx_key, gid, context_boost)
+		if use_bg_penalty:
+			weight *= _background_penalty(rules, gid, filtered.size())
+		weight *= _pick_jitter(rng, pick_jitter)
 		weights.append(weight)
 		total += weight
 

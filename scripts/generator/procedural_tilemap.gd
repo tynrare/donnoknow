@@ -117,7 +117,7 @@ func _is_selected_in_editor() -> bool:
 
 
 func _gen_options_dict() -> Dictionary:
-	return {}
+	return GenService.default_options()
 
 
 func _gen_paint_rect() -> Rect2i:

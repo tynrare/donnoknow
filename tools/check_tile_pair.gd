@@ -13,7 +13,7 @@ func _init() -> void:
 	var atlas := GenAtlasAnalyze.analyze_atlas(manifest)
 	var descs: Dictionary = atlas.get("tile_descs", {})
 
-	for gid in [GID_A, GID_B]:
+	for gid in GIDS:
 		var dd: Dictionary = descs.get(str(gid), {})
 		var local: int = int(dd.get("local", -1))
 		var cols: int = int(manifest.get("columns", 24))
@@ -23,19 +23,16 @@ func _init() -> void:
 		print("  cells: %s" % str(dd.get("cells", [])))
 		print("  edges: %s" % str(dd.get("edges", {})))
 
-	var du: Dictionary = descs[str(GID_A)]
-	var db: Dictionary = descs[str(GID_B)]
-	print("\n27 north : %s" % du.edges.get("north", ""))
-	print("468 south: %s" % db.edges.get("south", ""))
-	print("opposing match (27 above 468): %s" % GenAtlasAnalyze.opposing_edges_match(
-		du.edges, db.edges, "north"
-	))
-	print("cells equal: %s" % GenAtlasAnalyze.cells_equal(du.cells, db.cells))
-	print("rules 27 north->468: %s" % GenRules.adj_options(rules, GID_A, "north").get("468", 0))
-	print("rules 468 south->27: %s" % GenRules.adj_options(rules, GID_B, "south").get("27", 0))
-
-	var rep27: int = GenRules.representative_gid(rules, GID_A)
-	var rep468: int = GenRules.representative_gid(rules, GID_B)
-	print("\nrep 27=%d rep 468=%d" % [rep27, rep468])
-	print("rep 27 north->468: %s" % GenRules.adj_options(rules, rep27, "north").get(str(GID_B), 0))
+	for pair in [[27, 468], [29, 5]]:
+		var ga: int = pair[0]
+		var gb: int = pair[1]
+		var du: Dictionary = descs[str(ga)]
+		var db: Dictionary = descs[str(gb)]
+		print("\n--- %d north of %d ---" % [gb, ga])
+		print("%d north : %s" % [ga, du.edges.get("north", "")])
+		print("%d south: %s" % [gb, db.edges.get("south", "")])
+		print("edge match: %s  tiles equal: %s" % [
+			GenAtlasAnalyze.opposing_edges_match(du.edges, db.edges, "north"),
+			GenAtlasAnalyze.tiles_equal(du, db),
+		])
 	quit()

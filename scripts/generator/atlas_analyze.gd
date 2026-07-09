@@ -192,7 +192,6 @@ static func _build_sig_adjacency_from_descs(
 		var gid: int = int(gid_key)
 		var local: int = int(d.local)
 		var sig_a: String = str(d.sig)
-		var edges: Dictionary = d.edges
 		_ensure_sig_adj(sig_adj, sig_a)
 
 		var north_local: int = local - cols
@@ -200,7 +199,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid: int = first_gid + north_local
 			if descs.has(str(nb_gid)):
 				var nb: Dictionary = descs[str(nb_gid)]
-				if opposing_edges_match(edges, nb.edges, "north"):
+				if tiles_equal(d, nb):
 					var sig_b: String = str(nb.sig)
 					if not sig_b.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b, "north")
@@ -210,7 +209,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_s: int = first_gid + south_local
 			if descs.has(str(nb_gid_s)):
 				var nb_s: Dictionary = descs[str(nb_gid_s)]
-				if opposing_edges_match(edges, nb_s.edges, "south"):
+				if tiles_equal(d, nb_s):
 					var sig_b2: String = str(nb_s.sig)
 					if not sig_b2.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b2, "south")
@@ -221,7 +220,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_e: int = first_gid + east_local
 			if descs.has(str(nb_gid_e)):
 				var nb_e: Dictionary = descs[str(nb_gid_e)]
-				if opposing_edges_match(edges, nb_e.edges, "east"):
+				if tiles_equal(d, nb_e):
 					var sig_b3: String = str(nb_e.sig)
 					if not sig_b3.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b3, "east")
@@ -231,7 +230,7 @@ static func _build_sig_adjacency_from_descs(
 			var nb_gid_w: int = first_gid + west_local
 			if descs.has(str(nb_gid_w)):
 				var nb_w: Dictionary = descs[str(nb_gid_w)]
-				if opposing_edges_match(edges, nb_w.edges, "west"):
+				if tiles_equal(d, nb_w):
 					var sig_b4: String = str(nb_w.sig)
 					if not sig_b4.is_empty():
 						_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
