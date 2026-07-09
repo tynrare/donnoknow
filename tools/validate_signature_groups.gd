@@ -11,6 +11,8 @@ const RULES_PATH := "res://resources/generator/adve.rules.json"
 func _init() -> void:
 	var manifest := GenService.load_manifest(MANIFEST_PATH)
 	var rules := GenRules.load(RULES_PATH)
+	var atlas := GenAtlasAnalyze.analyze_atlas(manifest)
+	var descs: Dictionary = atlas.get("tile_descs", {})
 	var groups: Array = manifest.get("analyze", {}).get("signature_groups", [])
 	if groups.is_empty():
 		push_error("No analyze.signature_groups in manifest")
@@ -50,6 +52,7 @@ func _init() -> void:
 		else:
 			var extra := " outsiders=%s" % str(outsiders) if not outsiders.is_empty() else ""
 			print("PASS group %s sig=%s members=%s%s" % [str(gids), sig, str(members), extra])
+		_check_full_tile_members(descs, gids)
 
 	if ok:
 		print("PASS all signature groups")
@@ -57,3 +60,19 @@ func _init() -> void:
 	else:
 		push_error("FAIL signature group validation")
 		quit(1)
+
+
+func _check_full_tile_members(descs: Dictionary, gids: Array) -> void:
+	if gids.is_empty():
+		return
+	var rep: Array = descs.get(str(gids[0]), {}).get("cells", [])
+	if rep.is_empty():
+		return
+	for gid in gids:
+		var cells: Array = descs.get(str(gid), {}).get("cells", [])
+		if not GenAtlasAnalyze.cells_equal(cells, rep):
+			push_error(
+				"FAIL group %s: gid %d differs in full 2x2 tile (edge-only alias rejected)"
+				% [str(gids), gid]
+			)
+			quit(1)

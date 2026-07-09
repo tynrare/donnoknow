@@ -1,4 +1,4 @@
-# agent: composer-2.5 | 2026-07-09 | RGB-quad signatures + short hash | s2g3h4
+# agent: composer-2.5 | 2026-07-09 | RGB-quad signatures + atlas neighbor edges | s3g4h5
 extends RefCounted
 
 const DIRS := ["north", "east", "south", "west"]
@@ -52,36 +52,37 @@ static func analyze_atlas(manifest: Dictionary) -> Dictionary:
 		if cells.size() != grid * grid:
 			continue
 		var sig: String = _rgb_cells_to_sig(cells)
-		var edges: Dictionary
-		if grid == 2:
-			edges = {
-				"north": _rgb_key(cells[0]),
-				"east": _rgb_key(cells[1]),
-				"south": _rgb_key(cells[2]),
-				"west": _rgb_key(cells[0]),
-			}
-		else:
-			edges = {
-				"north": _rgb_key(cells[0]),
-				"east": _rgb_key(cells[grid - 1]),
-				"south": _rgb_key(cells[(grid - 1) * grid]),
-				"west": _rgb_key(cells[0]),
-			}
+		var edges: Dictionary = _edges_from_cells(cells, grid)
 
 		for cell in cells:
 			_register_palette_rgb(cell, palette, color_to_id)
+
+		if signatures.has(sig) and not signatures[sig].is_empty():
+			var rep_gid: int = int(signatures[sig][0])
+			var rep_cells: Array = descs[str(rep_gid)].cells
+			if not _cells_equal(cells, rep_cells):
+				push_warning(
+					"AtlasAnalyze: signature hash collision gid=%d sig=%s" % [gid, sig]
+				)
 
 		gid_to_sig[str(gid)] = sig
 		if not signatures.has(sig):
 			signatures[sig] = []
 		if not signatures[sig].has(gid):
 			signatures[sig].append(gid)
-		descs[str(gid)] = {"sig": sig, "edges": edges, "cells": cells}
+		descs[str(gid)] = {
+			"sig": sig,
+			"edges": edges,
+			"cells": cells,
+			"local": local,
+		}
 
 	for sig in signatures:
 		signatures[sig].sort()
 
-	var sig_adjacency: Dictionary = _build_sig_adjacency_from_descs(descs, gid_to_sig)
+	var sig_adjacency: Dictionary = _build_sig_adjacency_from_descs(
+		descs, gid_to_sig, cols, row_count, first_gid
+	)
 
 	return {
 		"signatures": signatures,
@@ -108,6 +109,10 @@ static func generatable_members(rules: Dictionary, sig: String) -> Array:
 	return signature_members(rules, sig)
 
 
+static func cells_equal(cells_a: Array, cells_b: Array) -> bool:
+	return _cells_equal(cells_a, cells_b)
+
+
 static func remap_gid_for_analyze(rules: Dictionary, gid: int) -> int:
 	var gid_to_sig: Dictionary = rules.get("gid_to_sig", {})
 	if gid_to_sig.is_empty():
@@ -122,47 +127,81 @@ static func remap_gid_for_analyze(rules: Dictionary, gid: int) -> int:
 	return gid
 
 
-static func _build_sig_adjacency_from_descs(descs: Dictionary, gid_to_sig: Dictionary) -> Dictionary:
-	var south_match_north: Dictionary = {}
-	var north_match_south: Dictionary = {}
-	var west_match_east: Dictionary = {}
-	var east_match_west: Dictionary = {}
+static func _edges_from_cells(cells: Array, grid: int) -> Dictionary:
+	if grid == 2:
+		return {
+			"north": _rgb_key(cells[0]),
+			"east": _rgb_key(cells[1]),
+			"south": _rgb_key(cells[2]),
+			"west": _rgb_key(cells[0]),
+		}
+	return {
+		"north": _rgb_key(cells[0]),
+		"east": _rgb_key(cells[grid - 1]),
+		"south": _rgb_key(cells[(grid - 1) * grid]),
+		"west": _rgb_key(cells[0]),
+	}
 
-	for gid_key in descs:
-		var d: Dictionary = descs[gid_key]
-		var edges: Dictionary = d.edges
-		var gid: int = int(gid_key)
-		_bucket_append(south_match_north, str(edges.north), gid)
-		_bucket_append(north_match_south, str(edges.south), gid)
-		_bucket_append(west_match_east, str(edges.east), gid)
-		_bucket_append(east_match_west, str(edges.west), gid)
 
+static func _build_sig_adjacency_from_descs(
+	descs: Dictionary,
+	gid_to_sig: Dictionary,
+	cols: int,
+	row_count: int,
+	first_gid: int,
+) -> Dictionary:
 	var sig_adj: Dictionary = {}
+	var tile_count: int = cols * row_count
+
 	for gid_key in descs:
 		var d: Dictionary = descs[gid_key]
+		var gid: int = int(gid_key)
+		var local: int = int(d.local)
 		var sig_a: String = str(d.sig)
 		var edges: Dictionary = d.edges
 		_ensure_sig_adj(sig_adj, sig_a)
-		for nb in south_match_north.get(str(edges.north), []):
-			var sig_b: String = str(gid_to_sig.get(str(int(nb)), ""))
-			if sig_b.is_empty() or sig_b == sig_a:
-				continue
-			_add_sig_pair(sig_adj, sig_a, sig_b, "north")
-		for nb in east_match_west.get(str(edges.east), []):
-			var sig_b2: String = str(gid_to_sig.get(str(int(nb)), ""))
-			if sig_b2.is_empty() or sig_b2 == sig_a:
-				continue
-			_add_sig_pair(sig_adj, sig_a, sig_b2, "east")
-		for nb in north_match_south.get(str(edges.south), []):
-			var sig_b3: String = str(gid_to_sig.get(str(int(nb)), ""))
-			if sig_b3.is_empty() or sig_b3 == sig_a:
-				continue
-			_add_sig_pair(sig_adj, sig_a, sig_b3, "south")
-		for nb in west_match_east.get(str(edges.west), []):
-			var sig_b4: String = str(gid_to_sig.get(str(int(nb)), ""))
-			if sig_b4.is_empty() or sig_b4 == sig_a:
-				continue
-			_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
+
+		var north_local: int = local - cols
+		if north_local >= 0:
+			var nb_gid: int = first_gid + north_local
+			if descs.has(str(nb_gid)):
+				var nb: Dictionary = descs[str(nb_gid)]
+				if str(edges.north) == str(nb.edges.south):
+					var sig_b: String = str(nb.sig)
+					if not sig_b.is_empty():
+						_add_sig_pair(sig_adj, sig_a, sig_b, "north")
+
+		var south_local: int = local + cols
+		if south_local < tile_count:
+			var nb_gid_s: int = first_gid + south_local
+			if descs.has(str(nb_gid_s)):
+				var nb_s: Dictionary = descs[str(nb_gid_s)]
+				if str(edges.south) == str(nb_s.edges.north):
+					var sig_b2: String = str(nb_s.sig)
+					if not sig_b2.is_empty():
+						_add_sig_pair(sig_adj, sig_a, sig_b2, "south")
+
+		var ax: int = local % cols
+		var east_local: int = local + 1
+		if ax + 1 < cols:
+			var nb_gid_e: int = first_gid + east_local
+			if descs.has(str(nb_gid_e)):
+				var nb_e: Dictionary = descs[str(nb_gid_e)]
+				if str(edges.east) == str(nb_e.edges.west):
+					var sig_b3: String = str(nb_e.sig)
+					if not sig_b3.is_empty():
+						_add_sig_pair(sig_adj, sig_a, sig_b3, "east")
+
+		var west_local: int = local - 1
+		if ax > 0:
+			var nb_gid_w: int = first_gid + west_local
+			if descs.has(str(nb_gid_w)):
+				var nb_w: Dictionary = descs[str(nb_gid_w)]
+				if str(edges.west) == str(nb_w.edges.east):
+					var sig_b4: String = str(nb_w.sig)
+					if not sig_b4.is_empty():
+						_add_sig_pair(sig_adj, sig_a, sig_b4, "west")
+
 	apply_same_sig_vertical_adj(sig_adj, descs, 2)
 	return sig_adj
 
@@ -183,23 +222,19 @@ static func apply_same_sig_vertical_adj(
 		var gids: Array = by_sig[sig]
 		if gids.size() < 2:
 			continue
-		var stackable := false
-		for a in gids:
-			var edges_a: Dictionary = descs[str(a)].edges
-			for b in gids:
-				if int(a) == int(b):
-					continue
-				var edges_b: Dictionary = descs[str(b)].edges
-				if str(edges_a.south) == str(edges_b.north):
-					stackable = true
-					break
-			if stackable:
+		var rep_cells: Array = descs[str(gids[0])].cells
+		# Only alias/interchange when every member shares the same full 2x2 tile.
+		var all_same_full := true
+		for gid in gids:
+			if not _cells_equal(descs[str(gid)].cells, rep_cells):
+				all_same_full = false
 				break
-		if stackable:
-			_ensure_sig_adj(sig_adj, sig)
-			var need: int = maxi(min_count, 2)
-			sig_adj[sig]["north"][sig] = maxi(int(sig_adj[sig]["north"].get(sig, 0)), need)
-			sig_adj[sig]["south"][sig] = maxi(int(sig_adj[sig]["south"].get(sig, 0)), need)
+		if not all_same_full:
+			continue
+		_ensure_sig_adj(sig_adj, sig)
+		var need: int = maxi(min_count, 2)
+		sig_adj[sig]["north"][sig] = maxi(int(sig_adj[sig]["north"].get(sig, 0)), need)
+		sig_adj[sig]["south"][sig] = maxi(int(sig_adj[sig]["south"].get(sig, 0)), need)
 
 
 static func expand_sig_adjacency_to_gids(
@@ -276,6 +311,17 @@ static func _downsample_rgb_grid(
 				)
 			)
 	return out
+
+
+static func _cells_equal(cells_a: Array, cells_b: Array) -> bool:
+	if cells_a.size() != cells_b.size():
+		return false
+	for i in cells_a.size():
+		var a: Vector3i = cells_a[i]
+		var b: Vector3i = cells_b[i]
+		if a != b:
+			return false
+	return true
 
 
 static func _rgb_key(cell: Vector3i) -> String:
