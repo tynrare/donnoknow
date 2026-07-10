@@ -1,0 +1,96 @@
+[gd_scene format=3 uid="uid://cplayui01"]
+
+[ext_resource type="Script" uid="uid://bplayui000001" path="res://scripts/ui/play_ui.gd" id="1_script"]
+[ext_resource type="Theme" path="res://resources/theme.tres" id="2_theme"]
+
+[node name="PlayUI" type="Control" unique_id=2128899005]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme = ExtResource("2_theme")
+script = ExtResource("1_script")
+
+[node name="TitleBar" type="MarginContainer" parent="." unique_id=824476203]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 46.0
+grow_horizontal = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+
+[node name="Title" type="Label" parent="TitleBar" unique_id=735020707]
+layout_mode = 2
+theme_override_font_sizes/font_size = 30
+text = "Play"
+
+[node name="MobileControls" type="Control" parent="." unique_id=2033781719]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="BottomBar" type="MarginContainer" parent="MobileControls" unique_id=202875800]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -64.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="Row" type="HBoxContainer" parent="MobileControls/BottomBar" unique_id=768882644]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LeftPad" type="HBoxContainer" parent="MobileControls/BottomBar/Row" unique_id=1461138737]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BtnLeft" type="Button" parent="MobileControls/BottomBar/Row/LeftPad" unique_id=1999340510]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 24
+text = "←"
+
+[node name="BtnRight" type="Button" parent="MobileControls/BottomBar/Row/LeftPad" unique_id=1961640018]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 24
+text = "→"
+
+[node name="Spacer" type="Control" parent="MobileControls/BottomBar/Row" unique_id=415636994]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="RightPad" type="HBoxContainer" parent="MobileControls/BottomBar/Row" unique_id=613108780]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BtnJump" type="Button" parent="MobileControls/BottomBar/Row/RightPad" unique_id=1552415783]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 18
+text = "JMP"
+
+[node name="BtnAttack" type="Button" parent="MobileControls/BottomBar/Row/RightPad" unique_id=1027556753]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+focus_mode = 0
+theme_override_font_sizes/font_size = 18
+text = "ATK"
