@@ -417,6 +417,114 @@ static func save_manifest(path: String, manifest: Dictionary) -> Error:
 	return OK
 
 
+# agent: composer-2.5 | 2026-07-10 | setup from tmx path | 79c0d1
+static func setup_from_tmx(tmx_path: String) -> Dictionary:
+	if tmx_path.is_empty() or not FileAccess.file_exists(tmx_path):
+		return {"ok": false, "error": "missing tmx: %s" % tmx_path}
+
+	var tmx_text := FileAccess.get_file_as_string(tmx_path)
+	var tsx_src := _tmx_external_tileset_src(tmx_text)
+	if tsx_src.is_empty():
+		return {"ok": false, "error": "tmx has no external tileset source: %s" % tmx_path}
+
+	var tmx_dir := tmx_path.get_base_dir()
+	var tsx_path := tmx_dir.path_join(tsx_src)
+	if not FileAccess.file_exists(tsx_path):
+		return {"ok": false, "error": "missing tsx: %s" % tsx_path}
+
+	var tsx_text := FileAccess.get_file_as_string(tsx_path)
+	var atlas_rel := _tsx_image_source(tsx_text)
+	if atlas_rel.is_empty():
+		return {"ok": false, "error": "tsx has no image source: %s" % tsx_path}
+
+	var atlas_path := tmx_dir.path_join(atlas_rel)
+	if not FileAccess.file_exists(atlas_path):
+		return {"ok": false, "error": "missing atlas: %s" % atlas_path}
+
+	var tsx_meta := GenValidate.read_tsx_meta(tsx_path)
+	var tw: int = maxi(int(tsx_meta.get("tilewidth", 8)), 1)
+	var th: int = maxi(int(tsx_meta.get("tileheight", 8)), 1)
+	var tile_size := Vector2i(tw, th)
+
+	var pack: String = tmx_dir.get_file()
+	if pack.is_empty():
+		pack = tmx_path.get_file().get_basename()
+
+	var tileset_path := "res://resources/%s.tileset.tres" % pack
+	var rules_path := "res://resources/generator/%s.rules.json" % pack
+	var manifest_path := tmx_dir.path_join("manifest.json")
+	var tileset_src: String = tsx_src.get_file()
+
+	var tileset := _create_tileset_from_atlas(atlas_path, tile_size)
+	if tileset == null:
+		return {"ok": false, "error": "failed to build tileset from %s" % atlas_path}
+
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(tileset_path.get_base_dir()))
+	var ts_err: Error = ResourceSaver.save(tileset, tileset_path)
+	if ts_err != OK:
+		return {"ok": false, "error": "tileset save failed: %s" % error_string(ts_err)}
+
+	var manifest := {
+		"atlas": atlas_path,
+		"background_gid": 1,
+		"tileset": tileset_path,
+		"tileset_src": tileset_src,
+		"maps": [tmx_path],
+		"rules": rules_path,
+		"analyze": {"tileset_edges": true},
+	}
+	var man_err: Error = save_manifest(manifest_path, manifest)
+	if man_err != OK:
+		return {"ok": false, "error": "manifest save failed: %s" % error_string(man_err)}
+
+	var enriched := enrich_manifest(manifest)
+	var map_size := Vector2i(int(enriched.get("map_width", 0)), int(enriched.get("map_height", 0)))
+	return {
+		"ok": true,
+		"manifest_path": manifest_path,
+		"rules_path": rules_path,
+		"tileset_path": tileset_path,
+		"atlas_path": atlas_path,
+		"map_size": map_size,
+		"pack": pack,
+	}
+
+
+static func _tmx_external_tileset_src(tmx_text: String) -> String:
+	var rx := RegEx.new()
+	rx.compile("<tileset[^>]*source=\"([^\"]+)\"")
+	var m := rx.search(tmx_text)
+	return m.get_string(1) if m else ""
+
+
+static func _tsx_image_source(tsx_text: String) -> String:
+	var rx := RegEx.new()
+	rx.compile("<image[^>]*source=\"([^\"]+)\"")
+	var m := rx.search(tsx_text)
+	return m.get_string(1) if m else ""
+
+
+static func _create_tileset_from_atlas(atlas_path: String, tile_size: Vector2i) -> TileSet:
+	var tex := load(atlas_path) as Texture2D
+	if tex == null:
+		return null
+	var columns: int = tex.get_width() / tile_size.x
+	var rows: int = tex.get_height() / tile_size.y
+	if columns <= 0 or rows <= 0:
+		return null
+
+	var tileset := TileSet.new()
+	tileset.tile_size = tile_size
+	var src := TileSetAtlasSource.new()
+	src.texture = tex
+	src.texture_region_size = tile_size
+	tileset.add_source(src, 0)
+	for y in rows:
+		for x in columns:
+			src.create_tile(Vector2i(x, y))
+	return tileset
+
+
 static func default_train_meta(chunk_size: Vector2i) -> Dictionary:
 	return {
 		"width": chunk_size.x,

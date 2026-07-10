@@ -759,6 +759,77 @@ func _clear_all_map() -> void:
 	print("ProceduralTilemap: cleared all Generated tiles")
 
 
+var _setup_dialog: EditorFileDialog = null
+
+
+# agent: composer-2.5 | 2026-07-10 | setup button file dialog | a82c94
+func _setup_from_scratch() -> void:
+	if not Engine.is_editor_hint():
+		return
+	if _setup_dialog != null:
+		return
+	_setup_dialog = EditorFileDialog.new()
+	_setup_dialog.file_mode = EditorFileDialog.FILE_MODE_OPEN_FILE
+	_setup_dialog.access = EditorFileDialog.ACCESS_RESOURCES
+	_setup_dialog.add_filter("*.tmx", "Tiled Map")
+	_setup_dialog.title = "Setup — pick reference map.tmx"
+	_setup_dialog.file_selected.connect(_on_setup_tmx_picked)
+	_setup_dialog.canceled.connect(_on_setup_dialog_closed)
+	EditorInterface.get_base_control().add_child(_setup_dialog)
+	_setup_dialog.popup_file_dialog()
+
+
+func _on_setup_dialog_closed() -> void:
+	if _setup_dialog != null:
+		_setup_dialog.queue_free()
+		_setup_dialog = null
+
+
+func _on_setup_tmx_picked(path: String) -> void:
+	_on_setup_dialog_closed()
+	var result: Dictionary = GenService.setup_from_tmx(path)
+	if not result.get("ok", false):
+		push_error("ProceduralTilemap setup: %s" % str(result.get("error", "?")))
+		_show_setup_dialog("Setup failed:\n%s" % str(result.get("error", "?")))
+		return
+
+	manifest_path = str(result.manifest_path)
+	rules_path = str(result.rules_path)
+	var ts := load(str(result.tileset_path)) as TileSet
+	if ts != null:
+		tile_set = ts
+	var map_size: Vector2i = result.get("map_size", Vector2i.ZERO)
+	if map_size.x > 0 and map_size.y > 0:
+		bounds = Rect2i(bounds.position, map_size)
+
+	notify_property_list_changed()
+	queue_bounds_redraw()
+	print(
+		"ProceduralTilemap: setup %s → manifest=%s rules=%s tileset=%s"
+		% [path, manifest_path, rules_path, result.tileset_path]
+	)
+	_show_setup_dialog(
+		"Setup complete.\n\nmanifest: %s\nrules: %s\ntileset: %s\n\nRun Analyze Rules next."
+		% [manifest_path, rules_path, result.tileset_path]
+	)
+
+
+func _show_setup_dialog(text: String) -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = "Procedural Tilemap Setup"
+	dlg.dialog_text = text
+	dlg.confirmed.connect(dlg.queue_free)
+	dlg.canceled.connect(dlg.queue_free)
+	EditorInterface.get_base_control().add_child(dlg)
+	dlg.popup_centered()
+
+
+@export_tool_button("Setup", "Callable")
+var _setup_action: Callable:
+	get:
+		return Callable(self, "_setup_from_scratch")
+
+
 @export_tool_button("Validate Setup", "Callable")
 var _validate_action: Callable:
 	get:

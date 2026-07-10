@@ -9,20 +9,5 @@
 	],
 	"rules": "res://resources/generator/adve.rules.json",
 	"tileset": "res://resources/adve.tileset.tres",
-	"tileset_src": "tiles.tsx",
-	"train_meta": {
-		"chunks": [
-			{
-				"h": 5,
-				"w": 5,
-				"x": 0,
-				"y": 0
-			}
-		],
-		"height": 5,
-		"next_x": 6,
-		"next_y": 0,
-		"padding": 1,
-		"width": 5
-	}
+	"tileset_src": "tiles.tsx"
 }
