@@ -4,17 +4,17 @@
 	},
 	"atlas": "res://assets/tiles/adve/tiles.png",
 	"background_gid": 1.0,
-	"columns": 24,
-	"first_gid": 1,
-	"map_height": 35,
-	"map_width": 54,
+	"columns": 24.0,
+	"first_gid": 1.0,
+	"map_height": 35.0,
+	"map_width": 54.0,
 	"maps": [
 		"res://assets/tiles/adve/map.tmx"
 	],
-	"rows": 21,
+	"rows": 21.0,
 	"rules": "res://resources/generator/adve.rules.json",
-	"source_id": 0,
-	"tile_count": 504,
+	"source_id": 0.0,
+	"tile_count": 504.0,
 	"tile_size": [
 		8,
 		8
@@ -24,16 +24,52 @@
 	"train_meta": {
 		"chunks": [
 			{
+				"h": 5.0,
+				"w": 5.0,
+				"x": 0.0,
+				"y": 0.0
+			},
+			{
+				"h": 5.0,
+				"w": 8.0,
+				"x": 6.0,
+				"y": 0.0
+			},
+			{
+				"h": 5.0,
+				"w": 8.0,
+				"x": 15.0,
+				"y": 0.0
+			},
+			{
+				"h": 6.0,
+				"w": 6.0,
+				"x": 24.0,
+				"y": 0.0
+			},
+			{
+				"h": 6.0,
+				"w": 6.0,
+				"x": 31.0,
+				"y": 0.0
+			},
+			{
+				"h": 4.0,
+				"w": 9.0,
+				"x": 38.0,
+				"y": 0.0
+			},
+			{
 				"h": 5,
 				"w": 5,
-				"x": 0,
+				"x": 48,
 				"y": 0
 			}
 		],
-		"height": 5,
-		"next_x": 6,
+		"height": 6,
+		"next_x": 54,
 		"next_y": 0,
-		"padding": 1,
-		"width": 5
+		"padding": 1.0,
+		"width": 53
 	}
 }
