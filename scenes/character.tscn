@@ -8,7 +8,11 @@ size = Vector2(6, 6)
 
 [node name="Character" type="CharacterBody2D" unique_id=1035365604]
 collision_layer = 2
+collision_mask = 3
+floor_snap_length = 2.0
 script = ExtResource("1_script")
+move_speed = 40.0
+jump_velocity = -120.0
 
 [node name="Sprite2D" type="Sprite2D" parent="." unique_id=1073577569]
 texture = ExtResource("2_tex")
