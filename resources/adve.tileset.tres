@@ -1,8 +1,8 @@
-[gd_resource type="TileSet" format=3]
+[gd_resource type="TileSet" format=3 uid="uid://cholgw5lwpq05"]
 
-[ext_resource type="Texture2D" path="res://assets/tiles/adve/tiles.png" id="1_vhxag"]
+[ext_resource type="Texture2D" uid="uid://cems7p7nrw7r2" path="res://assets/tiles/adve/tiles.png" id="1_vhxag"]
 
-[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_cr7jh"]
+[sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_vhxag"]
 texture = ExtResource("1_vhxag")
 texture_region_size = Vector2i(8, 8)
 0:0/0 = 0
@@ -512,4 +512,4 @@ texture_region_size = Vector2i(8, 8)
 
 [resource]
 tile_size = Vector2i(8, 8)
-sources/0 = SubResource("TileSetAtlasSource_cr7jh")
+sources/0 = SubResource("TileSetAtlasSource_vhxag")

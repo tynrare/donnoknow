@@ -841,13 +841,6 @@ var _analyze_action: Callable:
 	get:
 		return Callable(self, "_analyze_rules")
 
-
-@export_tool_button("Train", "Callable")
-var _train_action: Callable:
-	get:
-		return Callable(self, "_train_rules")
-
-
 @export_tool_button("Generate", "Callable")
 var _generate_action: Callable:
 	get:
@@ -858,6 +851,11 @@ var _generate_action: Callable:
 var _patch_action: Callable:
 	get:
 		return Callable(self, "_patch_map")
+
+@export_tool_button("Train", "Callable")
+var _train_action: Callable:
+	get:
+		return Callable(self, "_train_rules")
 
 
 @export_tool_button("Stop", "Callable")

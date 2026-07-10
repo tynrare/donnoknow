@@ -3,11 +3,37 @@
 		"tileset_edges": true
 	},
 	"atlas": "res://assets/tiles/adve/tiles.png",
-	"background_gid": 1,
+	"background_gid": 1.0,
+	"columns": 24,
+	"first_gid": 1,
+	"map_height": 35,
+	"map_width": 54,
 	"maps": [
 		"res://assets/tiles/adve/map.tmx"
 	],
+	"rows": 21,
 	"rules": "res://resources/generator/adve.rules.json",
+	"source_id": 0,
+	"tile_count": 504,
+	"tile_size": [
+		8,
+		8
+	],
 	"tileset": "res://resources/adve.tileset.tres",
-	"tileset_src": "tiles.tsx"
+	"tileset_src": "tiles.tsx",
+	"train_meta": {
+		"chunks": [
+			{
+				"h": 5,
+				"w": 5,
+				"x": 0,
+				"y": 0
+			}
+		],
+		"height": 5,
+		"next_x": 6,
+		"next_y": 0,
+		"padding": 1,
+		"width": 5
+	}
 }
