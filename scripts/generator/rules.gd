@@ -23,6 +23,22 @@ static func analyze_maps(
 	manifest: Dictionary = {},
 	chunk_size: int = DEFAULT_CHUNK_SIZE,
 ) -> Dictionary:
+	var map_data: Array = []
+	for map_path in maps:
+		var map := GenTmx.read_map(map_path)
+		if not map.is_empty():
+			map_data.append(map)
+	return analyze_map_data(map_data, min_adj_count, manifest, chunk_size, maps)
+
+
+# agent: composer-2.5 | 2026-07-10 | analyze map data refactor | 86a5f0
+static func analyze_map_data(
+	map_data: Array,
+	min_adj_count: int = 1,
+	manifest: Dictionary = {},
+	chunk_size: int = DEFAULT_CHUNK_SIZE,
+	map_sources: Array = [],
+) -> Dictionary:
 	var tile_counts: Dictionary = {}
 	var adjacency: Dictionary = {}
 	var context_weights: Dictionary = {}
@@ -57,16 +73,15 @@ static func analyze_maps(
 	topology = atlas_result.get("topology", {})
 
 	if use_maps:
-		for map_path in maps:
-			var map := GenTmx.read_map(map_path)
-			if map.is_empty():
+		for map in map_data:
+			if map is not Dictionary or map.is_empty():
 				continue
 			_scan_map(map, tile_counts, adjacency, manifest)
 			_scan_context(map, context_weights, manifest)
 			_scan_patterns_3x3(map, patterns_3x3, pattern_counts, manifest)
 			if use_chunks:
 				_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
-			total += map.width * map.height
+			total += int(map.width) * int(map.height)
 
 	_filter_adjacency(adjacency, min_adj)
 	_symmetrize_adjacency(adjacency)
@@ -86,6 +101,7 @@ static func analyze_maps(
 		var bg_gid: int = int(manifest.get("background_gid", 1))
 		_trim_self_adjacency(adjacency, bg_gid)
 
+	var context_counts: Dictionary = _copy_context_counts(context_weights)
 	_normalize_context_weights(context_weights, 3)
 
 	var tile_weights := {}
@@ -107,6 +123,7 @@ static func analyze_maps(
 		"pick_weight_mode": "log",
 		"adjacency": adjacency,
 		"context_weights": context_weights,
+		"context_counts": context_counts,
 		"patterns_3x3": patterns_3x3,
 		"pattern_counts": pattern_counts,
 		"chunks": chunks,
@@ -114,7 +131,7 @@ static func analyze_maps(
 		"chunk_compat": chunk_compat,
 		"chunk_size": chunk_size,
 		"tile_classes": tile_classes,
-		"maps": maps,
+		"maps": map_sources,
 		"sources": sources,
 		"grid": {
 			"columns": int(manifest.get("columns", 0)),
@@ -134,6 +151,56 @@ static func analyze_maps(
 			"alias_max_class_size": int(analyze.get("alias_max_class_size", 4)),
 		},
 	}
+
+
+# agent: composer-2.5 | 2026-07-10 | train region merge rules | d09bda
+static func train_from_region(
+	base: Dictionary,
+	gids: PackedInt32Array,
+	width: int,
+	height: int,
+	manifest: Dictionary = {},
+	chunk_size: int = DEFAULT_CHUNK_SIZE,
+) -> Dictionary:
+	var map := {"width": width, "height": height, "gids": gids}
+	var tile_counts: Dictionary = {}
+	var adjacency: Dictionary = {}
+	var context_weights: Dictionary = {}
+	var patterns_3x3: Array = []
+	var pattern_counts: Dictionary = {}
+	var chunks: Array = []
+	var chunk_set := {}
+	var chunk_counts: Dictionary = {}
+	var chunk_compat: Dictionary = {}
+
+	var analyze: Dictionary = manifest.get("analyze", {})
+	var use_chunks: bool = analyze.get("chunks", false)
+
+	_scan_map(map, tile_counts, adjacency, manifest)
+	_scan_context(map, context_weights, manifest)
+	_scan_patterns_3x3(map, patterns_3x3, pattern_counts, manifest)
+	if use_chunks:
+		_scan_chunks(map, chunks, chunk_set, chunk_counts, chunk_compat, manifest, chunk_size)
+
+	_filter_adjacency(adjacency, 1)
+	_symmetrize_adjacency(adjacency)
+
+	return _merge_into_rules(
+		base,
+		{
+			"tile_counts": tile_counts,
+			"adjacency": adjacency,
+			"context_counts": _copy_context_counts(context_weights),
+			"patterns_3x3": patterns_3x3,
+			"pattern_counts": pattern_counts,
+			"chunks": chunks,
+			"chunk_counts": chunk_counts,
+			"chunk_compat": chunk_compat,
+			"cells": _count_filled_gids(gids),
+		},
+		manifest,
+		chunk_size,
+	)
 
 
 static func save(path: String, rules: Dictionary) -> Error:
@@ -372,6 +439,171 @@ static func _trim_self_adjacency(adjacency: Dictionary, except_gid: int = 0) -> 
 			var bucket: Dictionary = adjacency[gid_key][d]
 			if bucket.has(gid_key):
 				bucket.erase(gid_key)
+
+
+static func _merge_into_rules(
+	base: Dictionary,
+	region: Dictionary,
+	manifest: Dictionary,
+	chunk_size: int,
+) -> Dictionary:
+	var out: Dictionary = base.duplicate(true)
+	var tile_counts: Dictionary = _tile_counts_from_rules(out)
+	for gid in region.tile_counts:
+		tile_counts[gid] = int(tile_counts.get(gid, 0)) + int(region.tile_counts[gid])
+
+	if not out.has("adjacency"):
+		out["adjacency"] = {}
+	_merge_adjacency(out.adjacency, region.adjacency, 1)
+
+	var context_counts: Dictionary = _context_counts_from_rules(out)
+	_merge_context_counts(context_counts, region.context_counts)
+	var ctx_norm: Dictionary = _copy_context_counts(context_counts)
+	_normalize_context_weights(ctx_norm, 3)
+	out["context_counts"] = context_counts
+	out["context_weights"] = ctx_norm
+
+	_merge_patterns(out, region.patterns_3x3, region.pattern_counts)
+	_merge_chunks(out, region.chunks, region.chunk_counts, region.chunk_compat)
+
+	var weights: Dictionary = _recompute_tile_weights(tile_counts)
+	out["tile_weights"] = weights.tile_weights
+	out["pick_weights"] = weights.pick_weights
+	out["pick_weight_mode"] = "log"
+
+	var stats: Dictionary = out.get("stats", {}).duplicate()
+	stats["cells"] = int(stats.get("cells", 0)) + int(region.cells)
+	stats["unique_tiles"] = tile_counts.size()
+	stats["patterns_3x3"] = out.get("patterns_3x3", []).size()
+	stats["context_keys"] = context_counts.size()
+	stats["chunks"] = out.get("chunks", []).size()
+	out["stats"] = stats
+	out["chunk_size"] = chunk_size
+	return out
+
+
+static func _count_filled_gids(gids: PackedInt32Array) -> int:
+	var n := 0
+	for gid in gids:
+		if gid > 0:
+			n += 1
+	return n
+
+
+static func _copy_context_counts(src: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for key in src:
+		var bucket: Variant = src[key]
+		if bucket is not Dictionary:
+			continue
+		out[key] = bucket.duplicate()
+	return out
+
+
+static func _tile_counts_from_rules(rules: Dictionary) -> Dictionary:
+	if rules.has("tile_counts") and rules.tile_counts is Dictionary:
+		return rules.tile_counts.duplicate()
+	var counts: Dictionary = {}
+	var cells: int = int(rules.get("stats", {}).get("cells", 0))
+	for k in rules.get("tile_weights", {}):
+		var gid: int = int(k)
+		var weight: float = float(rules.tile_weights[k])
+		counts[gid] = maxi(int(round(weight * float(maxi(cells, 1)))), 1) if cells > 0 else 1
+	return counts
+
+
+static func _context_counts_from_rules(rules: Dictionary) -> Dictionary:
+	if rules.has("context_counts") and rules.context_counts is Dictionary:
+		return _copy_context_counts(rules.context_counts)
+	return {}
+
+
+static func _merge_context_counts(into: Dictionary, from: Dictionary) -> void:
+	for key in from:
+		if not into.has(key):
+			into[key] = {}
+		var bucket: Dictionary = into[key]
+		for gid_key in from[key]:
+			bucket[gid_key] = int(bucket.get(gid_key, 0)) + int(from[key][gid_key])
+
+
+static func _merge_patterns(out: Dictionary, patterns: Array, pattern_counts: Dictionary) -> void:
+	var existing: Array = out.get("patterns_3x3", [])
+	if existing is not Array:
+		existing = []
+	var merged_counts: Dictionary = out.get("pattern_counts", {}).duplicate()
+	if merged_counts is not Dictionary:
+		merged_counts = {}
+	var seen: Dictionary = {}
+	for pat_v in existing:
+		var pat: PackedInt32Array = _coerce_pattern(pat_v)
+		if pat.size() == 9:
+			seen[_pattern_key(pat)] = true
+	for pat_v in patterns:
+		var pat: PackedInt32Array = _coerce_pattern(pat_v)
+		if pat.size() != 9:
+			continue
+		var key := _pattern_key(pat)
+		merged_counts[key] = int(merged_counts.get(key, 0)) + int(pattern_counts.get(key, 1))
+		if seen.has(key):
+			continue
+		seen[key] = true
+		var saved: Array = []
+		for gid in pat:
+			saved.append(gid)
+		existing.append(saved)
+	out["patterns_3x3"] = existing
+	out["pattern_counts"] = merged_counts
+
+
+static func _merge_chunks(
+	out: Dictionary,
+	chunks: Array,
+	chunk_counts: Dictionary,
+	chunk_compat: Dictionary,
+) -> void:
+	var existing: Array = out.get("chunks", [])
+	if existing is not Array:
+		existing = []
+	var merged_counts: Dictionary = out.get("chunk_counts", {}).duplicate()
+	if merged_counts is not Dictionary:
+		merged_counts = {}
+	var merged_compat: Dictionary = out.get("chunk_compat", {}).duplicate()
+	if merged_compat is not Dictionary:
+		merged_compat = {}
+	var seen: Dictionary = {}
+	for chunk_v in existing:
+		if chunk_v is Dictionary and chunk_v.has("id"):
+			seen[str(chunk_v.id)] = true
+	for chunk_v in chunks:
+		if chunk_v is not Dictionary or not chunk_v.has("id"):
+			continue
+		var id: String = str(chunk_v.id)
+		merged_counts[id] = int(merged_counts.get(id, 0)) + int(chunk_counts.get(id, 1))
+		if seen.has(id):
+			continue
+		seen[id] = true
+		existing.append(chunk_v)
+		if chunk_compat.has(id):
+			merged_compat[id] = chunk_compat[id]
+	out["chunks"] = existing
+	out["chunk_counts"] = merged_counts
+	out["chunk_compat"] = merged_compat
+
+
+static func _recompute_tile_weights(tile_counts: Dictionary) -> Dictionary:
+	var tile_weights := {}
+	var pick_weights := {}
+	var log_total := 0.0
+	for gid in tile_counts:
+		log_total += log(float(tile_counts[gid]) + 1.0)
+	var tile_total := 0
+	for gid in tile_counts:
+		tile_total += tile_counts[gid]
+	for gid in tile_counts:
+		tile_weights[str(gid)] = float(tile_counts[gid]) / float(maxi(tile_total, 1))
+		pick_weights[str(gid)] = log(float(tile_counts[gid]) + 1.0) / maxf(log_total, 0.001)
+	return {"tile_weights": tile_weights, "pick_weights": pick_weights}
 
 
 static func _merge_adjacency(into: Dictionary, from: Dictionary, weight: int = 1) -> void:

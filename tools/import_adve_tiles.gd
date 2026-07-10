@@ -39,38 +39,17 @@ func _import() -> void:
 		return
 
 	var map_meta := _read_map_size(MAP_PATH)
+	# agent: composer-2.5 | 2026-07-10 | slim import manifest | 86051f
 	var manifest := {
-		"pack": "adve",
-		"tile_size": [TILE_SIZE.x, TILE_SIZE.y],
-		"columns": columns,
-		"rows": rows,
-		"first_gid": 1,
-		"source_id": 0,
 		"atlas": ATLAS_PATH,
+		"background_gid": 1,
 		"tileset": TILESET_PATH,
 		"tileset_src": "tiles.tsx",
 		"maps": [MAP_PATH],
 		"rules": "res://resources/generator/adve.rules.json",
-		"tile_count": tile_count,
-		"map_width": map_meta.width,
-		"map_height": map_meta.height,
 		"analyze": {
-			"alias_auto": true,
-			"alias_max_class_size": 4,
-			"alias_max_col_distance": 1,
-			"alias_max_row_distance": 1,
-			"alias_threshold": 0.85,
-			"chunks": false,
-			"color_quantize": 24,
-			"edge_gap_max_neighbors": 8,
-			"edge_match": "exact",
-			"edge_quantize": 32,
-			"maps": true,
-			"min_adj_count": 2,
-			"save_topology": false,
 			"tileset_edges": true,
-			"tileset_edges_weight": 0.35,
-			"trim_self_adj": true,
+			"min_adj_count": 2,
 		},
 	}
 

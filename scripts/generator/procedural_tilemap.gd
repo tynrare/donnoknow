@@ -299,6 +299,97 @@ func _analyze_rules() -> void:
 	)
 
 
+# agent: composer-2.5 | 2026-07-10 | train paint over generated | b238de
+func _train_rules() -> void:
+	var manifest: Dictionary = GenService.load_manifest(manifest_path)
+	if manifest.is_empty():
+		push_error("ProceduralTilemap: missing manifest %s" % manifest_path)
+		return
+	if bounds.size.x <= 0 or bounds.size.y <= 0:
+		push_error("ProceduralTilemap: invalid bounds %s" % bounds)
+		return
+
+	var w: int = bounds.size.x
+	var h: int = bounds.size.y
+	var generated := get_node_or_null(GENERATED_NAME) as TileMapLayer
+	var gen_gids := PackedInt32Array()
+	gen_gids.resize(w * h)
+	gen_gids.fill(0)
+	if generated != null:
+		gen_gids = GenService.gids_from_layer(generated, manifest, w, h, bounds.position)
+	var paint_gids: PackedInt32Array = GenService.gids_from_layer(
+		self, manifest, w, h, bounds.position
+	)
+	var composite: PackedInt32Array = GenService.composite_gids(gen_gids, paint_gids)
+	var filled := 0
+	for gid in composite:
+		if gid > 0:
+			filled += 1
+	if filled == 0:
+		push_warning("ProceduralTilemap: no tiles in %s" % bounds)
+		return
+
+	var rules_path_resolved: String = (
+		rules_path if not rules_path.is_empty() else str(manifest.get("rules", ""))
+	)
+	manifest = GenService.ensure_train_scene(manifest, rules_path_resolved, tile_set, bounds.size)
+	var scene_path: String = GenService.resolve_train_scene(manifest, rules_path_resolved)
+	if scene_path.is_empty() or not FileAccess.file_exists(scene_path):
+		push_error("ProceduralTilemap: failed to create train scene")
+		return
+
+	var alloc: Dictionary = GenService.alloc_train_dest(manifest, bounds.size)
+	manifest = alloc.manifest
+	var dest: Rect2i = alloc.dest
+
+	var root: Node2D = GenService.open_train_root(scene_path)
+	if root == null:
+		push_error("ProceduralTilemap: failed to open train scene %s" % scene_path)
+		return
+	var train_layer := root.get_node_or_null(GenService.TRAIN_LAYER_NAME) as TileMapLayer
+	if train_layer == null:
+		root.free()
+		push_error("ProceduralTilemap: train scene missing %s layer" % GenService.TRAIN_LAYER_NAME)
+		return
+
+	GenService.apply_gids_region(train_layer, manifest, composite, w, dest.position)
+	train_layer.update_internals()
+	var chunk_gids: PackedInt32Array = composite
+	var scene_err: Error = GenService.save_train_root(root, scene_path)
+	root.free()
+	if scene_err != OK:
+		push_error("ProceduralTilemap: failed to save train scene: %s" % error_string(scene_err))
+		return
+
+	var manifest_err: Error = GenService.save_manifest(manifest_path, manifest)
+	if manifest_err != OK:
+		push_error("ProceduralTilemap: failed to save manifest: %s" % error_string(manifest_err))
+		return
+
+	var rules: Dictionary = GenRules.load(rules_path_resolved)
+	var cs: int = 8 if chunk_size == null else chunk_size
+	var updated: Dictionary = (
+		GenRules.train_from_region(rules, chunk_gids, w, h, manifest, cs)
+		if not rules.is_empty()
+		else GenRules.train_from_region({}, chunk_gids, w, h, manifest, cs)
+	)
+	var err: Error = GenRules.save(rules_path_resolved, updated)
+	if err != OK:
+		push_error("ProceduralTilemap: failed to save rules: %s" % error_string(err))
+		return
+	var stats: Dictionary = updated.get("stats", {})
+	print(
+		"ProceduralTilemap: trained %d cells %s → chunk %s in %s, %d tiles → %s" % [
+			filled,
+			bounds,
+			dest,
+			scene_path,
+			int(stats.get("unique_tiles", 0)),
+			rules_path_resolved,
+		]
+	)
+
+
 func _generate_map() -> void:
 	_start_wfc_job(false)
 
@@ -678,6 +769,12 @@ var _validate_action: Callable:
 var _analyze_action: Callable:
 	get:
 		return Callable(self, "_analyze_rules")
+
+
+@export_tool_button("Train", "Callable")
+var _train_action: Callable:
+	get:
+		return Callable(self, "_train_rules")
 
 
 @export_tool_button("Generate", "Callable")

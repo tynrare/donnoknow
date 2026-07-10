@@ -41,7 +41,75 @@ static func load_manifest(path: String = DEFAULT_MANIFEST) -> Dictionary:
 	if not FileAccess.file_exists(path):
 		return {}
 	var data = JSON.parse_string(FileAccess.get_file_as_string(path))
-	return data if data is Dictionary else {}
+	if data is not Dictionary:
+		return {}
+	return enrich_manifest(data)
+
+
+# agent: composer-2.5 | 2026-07-10 | enrich manifest on load | 1ef750
+static func enrich_manifest(manifest: Dictionary) -> Dictionary:
+	if manifest.is_empty():
+		return manifest
+	var out: Dictionary = manifest.duplicate(true)
+	if not out.has("first_gid"):
+		out["first_gid"] = 1
+	if not out.has("source_id"):
+		out["source_id"] = 0
+	if not out.has("background_gid"):
+		out["background_gid"] = 1
+
+	var tile_size: Array = out.get("tile_size", [])
+	var tw: int = int(tile_size[0]) if tile_size.size() > 0 else 8
+	var th: int = int(tile_size[1]) if tile_size.size() > 1 else 8
+	var tsx: Dictionary = GenValidate.read_tsx_meta(GenValidate.tsx_path(out))
+	if int(tsx.get("tilewidth", 0)) > 0:
+		tw = int(tsx.tilewidth)
+	if int(tsx.get("tileheight", 0)) > 0:
+		th = int(tsx.tileheight)
+	out["tile_size"] = [tw, th]
+
+	if int(out.get("columns", 0)) <= 0:
+		if int(tsx.get("columns", 0)) > 0:
+			out["columns"] = int(tsx.columns)
+		else:
+			var img_size: Vector2i = GenValidate.atlas_image_size(out)
+			if img_size.x > 0 and tw > 0:
+				out["columns"] = img_size.x / tw
+
+	if int(out.get("rows", 0)) <= 0:
+		var cols: int = int(out.get("columns", 0))
+		if int(tsx.get("tilecount", 0)) > 0 and cols > 0:
+			out["rows"] = int(tsx.tilecount) / cols
+		else:
+			var img_size: Vector2i = GenValidate.atlas_image_size(out)
+			if img_size.y > 0 and th > 0 and cols > 0:
+				out["rows"] = img_size.y / th
+
+	if int(out.get("tile_count", 0)) <= 0:
+		var cols: int = int(out.get("columns", 0))
+		var row_count: int = int(out.get("rows", 0))
+		if cols > 0 and row_count > 0:
+			out["tile_count"] = cols * row_count
+		elif int(tsx.get("tilecount", 0)) > 0:
+			out["tile_count"] = int(tsx.tilecount)
+
+	if int(out.get("map_width", 0)) <= 0 or int(out.get("map_height", 0)) <= 0:
+		var maps: Array = out.get("maps", [])
+		if not maps.is_empty():
+			var map_size: Vector2i = GenTmx.read_map_size(str(maps[0]))
+			if map_size.x > 0:
+				out["map_width"] = map_size.x
+			if map_size.y > 0:
+				out["map_height"] = map_size.y
+
+	return out
+
+
+static func resolve_train_scene(manifest: Dictionary, rules_path: String = "") -> String:
+	var rules: String = rules_path if not rules_path.is_empty() else str(manifest.get("rules", ""))
+	if rules.is_empty():
+		return ""
+	return train_scene_path(rules)
 
 
 static func columns(manifest: Dictionary) -> int:
@@ -209,6 +277,40 @@ static func gids_from_layer(
 	return out
 
 
+# agent: composer-2.5 | 2026-07-10 | composite gids train layer | 98127b
+static func composite_gids(base: PackedInt32Array, overlay: PackedInt32Array) -> PackedInt32Array:
+	var size: int = maxi(base.size(), overlay.size())
+	var out := PackedInt32Array()
+	out.resize(size)
+	out.fill(0)
+	for i in size:
+		var b: int = base[i] if i < base.size() else 0
+		var o: int = overlay[i] if i < overlay.size() else 0
+		out[i] = o if o > 0 else b
+	return out
+
+
+static func apply_gids_region(
+	layer: TileMapLayer,
+	manifest: Dictionary,
+	gids: PackedInt32Array,
+	width: int,
+	origin: Vector2i,
+) -> void:
+	var source_id: int = manifest.get("source_id", 0)
+	for i in gids.size():
+		var cell := origin + Vector2i(i % width, i / width)
+		var gid: int = gids[i]
+		if gid <= 0:
+			layer.erase_cell(cell)
+			continue
+		var atlas := gid_to_atlas(manifest, gid)
+		if atlas.x < 0:
+			layer.erase_cell(cell)
+			continue
+		layer.set_cell(cell, source_id, atlas)
+
+
 static func validate_manifest(manifest: Dictionary) -> String:
 	return GenValidate.first_error(GenValidate.validate_setup(manifest))
 
@@ -295,11 +397,179 @@ static func finalize_job(
 	return _wfc()._finalize_result(step, rules, constraints, seed, manifest, options)
 
 
+const TRAIN_ROOT_NAME := "TrainData"
+const TRAIN_LAYER_NAME := "Tiles"
+
+
+# agent: composer-2.5 | 2026-07-10 | train scene corpus flow | d4aa19
+static func train_scene_path(rules_path: String) -> String:
+	if rules_path.ends_with(".rules.json"):
+		return rules_path.replace(".rules.json", ".train.tscn")
+	return rules_path.get_basename() + ".train.tscn"
+
+
+static func save_manifest(path: String, manifest: Dictionary) -> Error:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	if f == null:
+		return FileAccess.get_open_error()
+	f.store_string(JSON.stringify(manifest, "\t"))
+	return OK
+
+
+static func default_train_meta(chunk_size: Vector2i) -> Dictionary:
+	return {
+		"width": chunk_size.x,
+		"height": chunk_size.y,
+		"padding": 1,
+		"next_x": 0,
+		"next_y": 0,
+		"chunks": [],
+	}
+
+
+static func ensure_train_scene(
+	manifest: Dictionary,
+	rules_path: String,
+	tile_set: TileSet,
+	chunk_size: Vector2i,
+) -> Dictionary:
+	var scene_path: String = resolve_train_scene(manifest, rules_path)
+	if scene_path.is_empty():
+		return manifest
+
+	if not FileAccess.file_exists(scene_path):
+		var root := Node2D.new()
+		root.name = TRAIN_ROOT_NAME
+		var layer := TileMapLayer.new()
+		layer.name = TRAIN_LAYER_NAME
+		layer.tile_set = tile_set
+		root.add_child(layer)
+		layer.owner = root
+
+		var packed := PackedScene.new()
+		var pack_err: Error = packed.pack(root)
+		root.free()
+		if pack_err != OK:
+			push_error("GenService: failed to pack train scene")
+			return manifest
+
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(scene_path.get_base_dir()))
+		var save_err: Error = ResourceSaver.save(packed, scene_path)
+		if save_err != OK:
+			push_error("GenService: failed to save train scene %s" % scene_path)
+			return manifest
+
+		if not manifest.has("train_meta"):
+			manifest["train_meta"] = default_train_meta(chunk_size)
+	elif not manifest.has("train_meta"):
+		manifest["train_meta"] = default_train_meta(chunk_size)
+
+	return manifest
+
+
+static func open_train_root(scene_path: String) -> Node2D:
+	var packed := load(scene_path) as PackedScene
+	if packed == null:
+		return null
+	return packed.instantiate() as Node2D
+
+
+static func save_train_root(root: Node2D, scene_path: String) -> Error:
+	var packed := PackedScene.new()
+	var err: Error = packed.pack(root)
+	if err != OK:
+		return err
+	return ResourceSaver.save(packed, scene_path)
+
+
+static func alloc_train_dest(manifest: Dictionary, chunk_size: Vector2i) -> Dictionary:
+	var meta: Dictionary = manifest.get("train_meta", {}).duplicate(true)
+	if meta.is_empty():
+		meta = default_train_meta(chunk_size)
+	var padding: int = maxi(int(meta.get("padding", 1)), 0)
+	var next_x: int = int(meta.get("next_x", 0))
+	var next_y: int = int(meta.get("next_y", 0))
+	var w: int = chunk_size.x
+	var h: int = chunk_size.y
+	var dest := Rect2i(next_x, next_y, w, h)
+
+	meta["width"] = maxi(int(meta.get("width", w)), dest.position.x + w)
+	meta["height"] = maxi(int(meta.get("height", h)), dest.position.y + h)
+	meta["next_x"] = dest.position.x + w + padding
+	meta["next_y"] = next_y
+
+	var chunks: Array = meta.get("chunks", [])
+	if chunks is not Array:
+		chunks = []
+	chunks.append({
+		"x": dest.position.x,
+		"y": dest.position.y,
+		"w": w,
+		"h": h,
+	})
+	meta["chunks"] = chunks
+	manifest["train_meta"] = meta
+	return {"manifest": manifest, "dest": dest}
+
+
+static func copy_region_to_layer(
+	src: TileMapLayer,
+	dst: TileMapLayer,
+	src_rect: Rect2i,
+	dst_origin: Vector2i,
+	manifest: Dictionary,
+) -> void:
+	var source_id: int = manifest.get("source_id", 0)
+	for y in src_rect.size.y:
+		for x in src_rect.size.x:
+			var src_cell := src_rect.position + Vector2i(x, y)
+			var dst_cell := dst_origin + Vector2i(x, y)
+			var atlas := src.get_cell_atlas_coords(src_cell)
+			if atlas.x < 0:
+				dst.erase_cell(dst_cell)
+			else:
+				dst.set_cell(dst_cell, source_id, atlas)
+
+
+static func load_train_map_data(manifest: Dictionary) -> Dictionary:
+	var scene_path: String = resolve_train_scene(manifest)
+	if scene_path.is_empty() or not FileAccess.file_exists(scene_path):
+		return {}
+	var meta: Dictionary = manifest.get("train_meta", {})
+	var w: int = int(meta.get("width", 0))
+	var h: int = int(meta.get("height", 0))
+	if w <= 0 or h <= 0:
+		return {}
+
+	var root := open_train_root(scene_path)
+	if root == null:
+		return {}
+	var layer := root.get_node_or_null(TRAIN_LAYER_NAME) as TileMapLayer
+	if layer == null:
+		root.free()
+		return {}
+
+	var gids: PackedInt32Array = gids_from_layer(layer, manifest, w, h, Vector2i.ZERO)
+	root.free()
+	return {"width": w, "height": h, "gids": gids, "path": scene_path}
+
+
 static func analyze_manifest(manifest: Dictionary, chunk_size: int = 8) -> Dictionary:
-	var maps: Array = manifest.get("maps", [])
+	var map_data: Array = []
+	var map_sources: Array = []
+	for map_path in manifest.get("maps", []):
+		var map: Dictionary = GenTmx.read_map(str(map_path))
+		if not map.is_empty():
+			map_data.append(map)
+			map_sources.append(map_path)
+	var train_map: Dictionary = load_train_map_data(manifest)
+	if not train_map.is_empty():
+		map_data.append(train_map)
+		map_sources.append(train_map.get("path", resolve_train_scene(manifest)))
 	var analyze: Dictionary = manifest.get("analyze", {})
 	var min_adj: int = maxi(int(analyze.get("min_adj_count", 1)), 1)
-	return GenRules.analyze_maps(maps, min_adj, manifest, chunk_size)
+	return GenRules.analyze_map_data(map_data, min_adj, manifest, chunk_size, map_sources)
 
 
 static func save_rules(manifest: Dictionary, rules: Dictionary) -> Error:
