@@ -2,8 +2,19 @@
 
 [ext_resource type="PackedScene" uid="uid://bs8qqala2ddtj" path="res://assets/meshes/title.glb" id="1_3jj6r"]
 [ext_resource type="Material" uid="uid://q3kxn0pkl3iw" path="res://resources/materials/title_wave.tres" id="2_wave"]
+[ext_resource type="Script" uid="uid://biuyqkk7m4f6e" path="res://scripts/title/title.gd" id="3_script"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_playbtn"]
+size = Vector3(0.86816, 0.201126, 0.345955)
 
 [node name="title" unique_id=2107194750 instance=ExtResource("1_3jj6r")]
+script = ExtResource("3_script")
 
-[node name="Text" parent="." index="0" unique_id=1547252542]
+[node name="Text" parent="." index="0" unique_id=1196038348]
 surface_material_override/0 = ExtResource("2_wave")
+
+[node name="PlayBtnArea" type="Area3D" parent="playbtn" parent_id_path=PackedInt32Array(1820278515) index="0" unique_id=1982736451]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.004376, -0.028134)
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="playbtn/PlayBtnArea" index="0" unique_id=1459823104]
+shape = SubResource("BoxShape3D_playbtn")

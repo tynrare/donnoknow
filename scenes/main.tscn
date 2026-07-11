@@ -2,6 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://cmenusplash1" path="res://scenes/menusplash.tscn" id="1_splash"]
 [ext_resource type="PackedScene" uid="uid://cmenu001" path="res://scenes/menu.tscn" id="2_menu"]
+[ext_resource type="Script" uid="uid://b8t3ddgkpasnj" path="res://scripts/main.gd" id="3_main"]
 
 [node name="Main" type="Control" unique_id=115227327]
 layout_mode = 3
@@ -11,6 +12,7 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
+script = ExtResource("3_main")
 
 [node name="MenuSplash" type="SubViewportContainer" parent="." unique_id=779244733]
 layout_mode = 1
@@ -19,7 +21,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-mouse_filter = 2
+mouse_filter = 0
 stretch = true
 
 [node name="SubViewport" type="SubViewport" parent="MenuSplash" unique_id=1499924609]

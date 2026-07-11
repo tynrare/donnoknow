@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" uid="uid://bck1djlqk6o58" path="res://resources/meshes/title.tscn" id="2_yx387"]
 [ext_resource type="Texture2D" uid="uid://k45qba58md5a" path="res://assets/textures/patterns/pattern_47.png" id="3_8lor1"]
 [ext_resource type="Shader" uid="uid://dk5wera06vcau" path="res://resources/shaders/pattern_scroll.gdshader" id="3_fgsnx"]
+[ext_resource type="Material" path="res://resources/materials/gradient_plane.tres" id="4_gradient"]
 
 [sub_resource type="QuadMesh" id="QuadMesh_jojec"]
 size = Vector2(10, 10)
@@ -15,8 +16,8 @@ shader_parameter/pattern_texture = ExtResource("3_8lor1")
 shader_parameter/texture_scale = Vector2(5, 5)
 shader_parameter/scroll_direction = Vector2(1, 0)
 shader_parameter/scroll_speed = 0.05
-shader_parameter/color_a = Color(0, 0, 0, 1)
-shader_parameter/color_b = Color(0.41960785, 1, 0.4392157, 1)
+shader_parameter/color_a = Color(0, 0, 0, 0)
+shader_parameter/color_b = Color(0.5805929, 0.91702306, 0.99999994, 1)
 
 [node name="MenuSplash" type="Node3D" unique_id=475429863]
 
@@ -30,10 +31,16 @@ shadow_opacity = 0.75
 
 [node name="Camera3D" type="Camera3D" parent="." unique_id=935209708]
 transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 2.5, 4)
+current = true
 fov = 27.9
 
+[node name="GradientPlane" type="MeshInstance3D" parent="." unique_id=912384756]
+transform = Transform3D(1, 0, 0, 0, 0.86602545, 0.5, 0, -0.5, 0.86602545, 0, 0.68526113, -0.9)
+mesh = SubResource("QuadMesh_jojec")
+surface_material_override/0 = ExtResource("4_gradient")
+
 [node name="PatternPlane2" type="MeshInstance3D" parent="." unique_id=1311248634]
-transform = Transform3D(1, 0, 0, 0, 0.86602545, 0.5, 0, -0.5, 0.86602545, 0, 0.8048179, -0.7833197)
+transform = Transform3D(1, 0, 0, 0, 0.86602545, 0.5, 0, -0.5, 0.86602545, 0, 0.68526113, -0.7833197)
 mesh = SubResource("QuadMesh_jojec")
 surface_material_override/0 = SubResource("ShaderMaterial_25m7h")
 

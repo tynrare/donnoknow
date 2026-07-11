@@ -1,0 +1,12 @@
+; agent: composer-2.5 | 2026-07-11 | gradient plane material | b89d85
+[gd_resource type="ShaderMaterial" format=3]
+
+[ext_resource type="Shader" path="res://resources/shaders/gradient_plane.gdshader" id="1_shader"]
+
+[resource]
+render_priority = -2
+shader = ExtResource("1_shader")
+shader_parameter/color_a = Color(0.05, 0.08, 0.14, 1)
+shader_parameter/color_b = Color(0.15, 0.28, 0.45, 1)
+shader_parameter/gradient_direction = Vector2(0, 1)
+shader_parameter/sharpness = 2.0
