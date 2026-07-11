@@ -2,7 +2,7 @@
 
 [ext_resource type="Script" uid="uid://cdp6ya7vuj5kj" path="res://scripts/menu.gd" id="1"]
 [ext_resource type="Theme" path="res://resources/theme.tres" id="2"]
-[ext_resource type="TileSet" uid="uid://b5nfy14snb1sa" path="res://resources/platformer.tileset.tres" id="3"]
+[ext_resource type="TileSet" uid="uid://boe45xg8e1dsy" path="res://resources/platformer.tileset.tres" id="3"]
 
 [node name="Menu" type="Control" unique_id=2086842347]
 layout_mode = 3
@@ -25,22 +25,24 @@ grow_vertical = 2
 [node name="VBox" type="VBoxContainer" parent="CenterContainer" unique_id=893573315]
 layout_mode = 2
 
+[node name="Control" type="Control" parent="CenterContainer/VBox" unique_id=599091001]
+custom_minimum_size = Vector2(0, 200)
+layout_mode = 2
+
 [node name="Title" type="Label" parent="CenterContainer/VBox" unique_id=894761042]
+visible = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 50
 text = "donnoknow"
 
-[node name="Preview" type="Control" parent="CenterContainer/VBox/Title" unique_id=975523249]
-custom_minimum_size = Vector2(162, 36)
-anchors_preset = 0
-offset_top = 74.0
-offset_right = 169.0
-offset_bottom = 110.0
-
-[node name="TileMapLayer" type="TileMapLayer" parent="CenterContainer/VBox/Title/Preview" unique_id=1527530686]
-tile_map_data = PackedByteArray("AAAAAAAAAAAAAAcAAAAAAAEAAAAAAAgAAAABAAAAAAABAAcAAAABAAEAAAABAAgAAAACAAAAAAACAAcAAAACAAEAAAACAAgAAAADAAAAAAADAAcAAAADAAEAAAADAAgAAAAEAAAAAAAEAAcAAAAEAAEAAAAEAAgAAAAFAAAAAAAFAAcAAAAFAAEAAAAFAAgAAAAGAAAAAAAGAAcAAAAGAAEAAAAGAAgAAAAHAAAAAAAHAAcAAAAHAAEAAAAHAAgAAAAIAAAAAAAIAAcAAAAIAAEAAAAIAAgAAAAAAP//AAAAAAYAAAABAP//AAABAAYAAAACAP//AAACAAYAAAADAP//AAADAAYAAAAEAP//AAAEAAYAAAAFAP//AAAFAAYAAAAGAP//AAAGAAYAAAAHAP//AAAHAAYAAAAIAP//AAAIAAYAAAA=")
-tile_set = ExtResource("3")
-
 [node name="Play" type="Button" parent="CenterContainer/VBox" unique_id=2110201993]
 layout_mode = 2
 text = "Play"
+
+[node name="Preview" type="Control" parent="CenterContainer/VBox" unique_id=975523249]
+custom_minimum_size = Vector2(162, 65.645)
+layout_mode = 2
+
+[node name="TileMapLayer" type="TileMapLayer" parent="CenterContainer/VBox/Preview" unique_id=1527530686]
+tile_map_data = PackedByteArray("AAAAAAAAAAAAAAYAAAAAAAEAAAAAAAcAAAAAAAIAAAAAAAgAAAABAAAAAAABAAYAAAABAAEAAAABAAcAAAABAAIAAAABAAgAAAACAAAAAAACAAYAAAACAAEAAAACAAcAAAACAAIAAAACAAgAAAADAAAAAAADAAYAAAADAAEAAAADAAcAAAADAAIAAAADAAgAAAAEAAAAAAAEAAYAAAAEAAEAAAAEAAcAAAAEAAIAAAAEAAgAAAAFAAAAAAAFAAYAAAAFAAEAAAAFAAcAAAAFAAIAAAAFAAgAAAAGAAAAAAAGAAYAAAAGAAEAAAAGAAcAAAAGAAIAAAAGAAgAAAAHAAAAAAAHAAYAAAAHAAEAAAAHAAcAAAAHAAIAAAAHAAgAAAAIAAAAAAAIAAYAAAAIAAEAAAAIAAcAAAAIAAIAAAAIAAgAAAA=")
+tile_set = ExtResource("3")

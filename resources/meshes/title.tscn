@@ -1,0 +1,9 @@
+[gd_scene format=3 uid="uid://bck1djlqk6o58"]
+
+[ext_resource type="PackedScene" uid="uid://bs8qqala2ddtj" path="res://assets/meshes/title.glb" id="1_3jj6r"]
+[ext_resource type="Material" uid="uid://q3kxn0pkl3iw" path="res://resources/materials/title_wave.tres" id="2_wave"]
+
+[node name="title" unique_id=2107194750 instance=ExtResource("1_3jj6r")]
+
+[node name="Text" parent="." index="0" unique_id=1547252542]
+surface_material_override/0 = ExtResource("2_wave")

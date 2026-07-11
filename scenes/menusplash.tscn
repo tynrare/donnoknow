@@ -1,0 +1,41 @@
+[gd_scene format=3 uid="uid://cmenusplash1"]
+
+[ext_resource type="Environment" uid="uid://cmenuenv01" path="res://resources/menu-environment.tres" id="1_env"]
+[ext_resource type="PackedScene" uid="uid://bck1djlqk6o58" path="res://resources/meshes/title.tscn" id="2_yx387"]
+[ext_resource type="Texture2D" uid="uid://k45qba58md5a" path="res://assets/textures/patterns/pattern_47.png" id="3_8lor1"]
+[ext_resource type="Shader" uid="uid://dk5wera06vcau" path="res://resources/shaders/pattern_scroll.gdshader" id="3_fgsnx"]
+
+[sub_resource type="QuadMesh" id="QuadMesh_jojec"]
+size = Vector2(10, 10)
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_25m7h"]
+render_priority = -1
+shader = ExtResource("3_fgsnx")
+shader_parameter/pattern_texture = ExtResource("3_8lor1")
+shader_parameter/texture_scale = Vector2(5, 5)
+shader_parameter/scroll_direction = Vector2(1, 0)
+shader_parameter/scroll_speed = 0.05
+shader_parameter/color_a = Color(0, 0, 0, 1)
+shader_parameter/color_b = Color(0.41960785, 1, 0.4392157, 1)
+
+[node name="MenuSplash" type="Node3D" unique_id=475429863]
+
+[node name="Environment" type="WorldEnvironment" parent="." unique_id=1560141200]
+environment = ExtResource("1_env")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1087106771]
+transform = Transform3D(-0.422618, -0.694272, 0.582563, 0, 0.642788, 0.766044, -0.906308, 0.323744, -0.271654, 0, 0, 0)
+shadow_enabled = true
+shadow_opacity = 0.75
+
+[node name="Camera3D" type="Camera3D" parent="." unique_id=935209708]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 2.5, 4)
+fov = 27.9
+
+[node name="PatternPlane2" type="MeshInstance3D" parent="." unique_id=1311248634]
+transform = Transform3D(1, 0, 0, 0, 0.86602545, 0.5, 0, -0.5, 0.86602545, 0, 0.8048179, -0.7833197)
+mesh = SubResource("QuadMesh_jojec")
+surface_material_override/0 = SubResource("ShaderMaterial_25m7h")
+
+[node name="title" parent="." unique_id=2107194750 instance=ExtResource("2_yx387")]
+transform = Transform3D(1, 0, 0, 0, 0.49999997, -0.86602545, 0, 0.86602545, 0.49999997, 0, 0, 0)

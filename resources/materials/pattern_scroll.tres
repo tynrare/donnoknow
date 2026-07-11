@@ -1,0 +1,14 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://cv4x4kmbua47r"]
+
+[ext_resource type="Shader" uid="uid://dk5wera06vcau" path="res://resources/shaders/pattern_scroll.gdshader" id="1_shader"]
+[ext_resource type="Texture2D" uid="uid://baooc3qljuksp" path="res://assets/textures/patterns/pattern_66.png" id="2_6e8j7"]
+
+[resource]
+render_priority = -1
+shader = ExtResource("1_shader")
+shader_parameter/pattern_texture = ExtResource("2_6e8j7")
+shader_parameter/texture_scale = Vector2(12, 8)
+shader_parameter/scroll_direction = Vector2(1, 0.25)
+shader_parameter/scroll_speed = 0.0999999530608
+shader_parameter/color_a = Color(0, 0, 0, 0.101960786)
+shader_parameter/color_b = Color(0, 0, 0, 1)

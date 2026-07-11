@@ -1,0 +1,16 @@
+[gd_resource type="ShaderMaterial" format=3 uid="uid://q3kxn0pkl3iw"]
+
+[ext_resource type="Shader" uid="uid://ci4dsbccl6m8x" path="res://resources/shaders/title_wave.gdshader" id="1_shader"]
+
+[resource]
+render_priority = -1
+shader = ExtResource("1_shader")
+shader_parameter/albedo_color = Color(0.41960785, 1, 0.4392157, 1)
+shader_parameter/roughness = 0.35
+shader_parameter/metallic = 0.0
+shader_parameter/wave_axis = 2
+shader_parameter/wave_amplitude = 0.04
+shader_parameter/wave_frequency = 2.20000003278264
+shader_parameter/wave_speed = 1.5
+shader_parameter/phase_offset = 0.0
+shader_parameter/position_axis = Vector2(1, 0)
